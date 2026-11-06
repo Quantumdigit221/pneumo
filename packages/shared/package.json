@@ -1,0 +1,8 @@
+{
+  "name": "@chrein/shared",
+  "version": "1.0.0",
+  "description": "Shared contracts, enums and types for DPI CHREIN",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "private": true
+}

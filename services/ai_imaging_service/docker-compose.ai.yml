@@ -1,0 +1,34 @@
+# Docker Compose pour le Serveur d'Inférence IA Externe GPU (Phase 1 & Phase 2)
+# Déploiement sur serveur ou station de travail dédiée (ex: 1x NVIDIA RTX 3090 / A10G / A100)
+
+services:
+  ai-imaging-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chrein-ai-imaging-engine
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - CUDA_VISIBLE_DEVICES=0
+      - MONAI_DATA_DIR=/app/weights
+      - APP_ENV=production
+      - TZ=Africa/Dakar
+    volumes:
+      - ai_model_weights:/app/weights
+      - ai_audit_logs:/app/logs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  ai_model_weights:
+    driver: local
+  ai_audit_logs:
+    driver: local

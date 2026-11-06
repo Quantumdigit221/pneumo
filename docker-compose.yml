@@ -1,0 +1,75 @@
+# Docker Compose — DPI CHREIN (Centre Hospitalier Régional El Hadji Ibrahima Niass • Kaolack)
+# Environnement de développement et déploiement local sécurisé avec PostgreSQL 16 & pgAdmin
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: chrein-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: chrein_user
+      POSTGRES_PASSWORD: chrein_secure_password_kaolack
+      POSTGRES_DB: chrein_dpi_db
+      TZ: Africa/Dakar
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chrein_user -d chrein_dpi_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: chrein-pgadmin
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@chrein.sn
+      PGADMIN_DEFAULT_PASSWORD: admin_chrein_secret
+      TZ: Africa/Dakar
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: chrein-api
+    restart: always
+    environment:
+      PORT: 4000
+      NODE_ENV: development
+      DATABASE_URL: postgresql://chrein_user:chrein_secure_password_kaolack@postgres:5432/chrein_dpi_db?schema=public
+      JWT_SECRET: chrein_super_secret_jwt_key_kaolack_2026
+      JWT_EXPIRES_IN: 15m
+      JWT_REFRESH_SECRET: chrein_refresh_token_secret_key_2026
+      TZ: Africa/Dakar
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: chrein-web
+    restart: always
+    environment:
+      PORT: 3000
+      NEXT_PUBLIC_API_URL: http://localhost:4000/api/v1
+      TZ: Africa/Dakar
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+    driver: local

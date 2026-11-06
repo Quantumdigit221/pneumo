@@ -1,0 +1,124 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui;
+  --font-display: "Space Grotesk", sans-serif;
+  --font-mono: "Fira Code", monospace;
+}
+
+@media print {
+  /* 1. Official A4 Page Setup */
+  @page {
+    size: A4 portrait;
+    margin: 12mm 12mm 12mm 12mm;
+  }
+
+  /* 2. Global Document Reset for Crisp High-Contrast Output */
+  html, body {
+    width: 100% !important;
+    min-width: 100% !important;
+    height: auto !important;
+    min-height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+    overflow: visible !important;
+    font-size: 10pt !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* 3. Hide all non-printable chrome: sidebars, navigation, headers, toolbars, voice assistants, modals backdrop */
+  nav, aside, header, footer, .no-print, [role="tooltip"],
+  button:not(.print-include), .clinical-voice-widget, .toast, .portal-notification {
+    display: none !important;
+  }
+
+  /* When an active print modal is displayed, hide the underlying page background */
+  body:has(.print-modal-active) #root > *:not(.print-modal-active),
+  body:has(.print-modal-active) main > *:not(.print-modal-active),
+  body:has(.print-modal-active) main {
+    background: transparent !important;
+  }
+
+  /* 4. De-frame modals for printing: remove fixed overlays, dark backdrops, and scroll constraints */
+  .print-modal-overlay {
+    position: static !important;
+    inset: auto !important;
+    width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: transparent !important;
+    backdrop-filter: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+    border: none !important;
+    display: block !important;
+    z-index: auto !important;
+  }
+
+  .print-modal-content {
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    display: block !important;
+  }
+
+  /* 5. A4 Document Sheet Architecture */
+  .a4-document-sheet {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #090d16 !important;
+    border: none !important;
+    box-shadow: none !important;
+    font-size: 9.5pt !important;
+    line-height: 1.45 !important;
+    display: block !important;
+  }
+
+  /* 6. Page-Break Rules to Prevent Orphan Headings or Split Signatures */
+  .avoid-page-break {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .force-page-break {
+    break-after: page !important;
+    page-break-after: always !important;
+  }
+
+  tr, td, th {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  img, svg {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  /* High-contrast crisp borders on paper */
+  .print-border {
+    border-color: #94a3b8 !important;
+  }
+
+  .print-bg-subtle {
+    background-color: #f8fafc !important;
+  }
+}
+

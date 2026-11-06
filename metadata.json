@@ -1,0 +1,10 @@
+{
+  "name": "Pneumo App ",
+  "description": "Dossier patient informatisé intelligent pour le Service de Pneumologie et Maladies Infectieuses (CHREIN Kaolack) : consultations en 12 étapes, formulaires spécialisés (TB, BPCO, Asthme), bibliothèque de scores cliniques, hospitalisations, soins paramédicaux et recherche.",
+  "requestFramePermissions": [
+    "MICROPHONE"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

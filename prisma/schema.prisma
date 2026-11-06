@@ -1,0 +1,376 @@
+// Prisma Schema — DPI CHREIN (Centre Hospitalier Régional El Hadji Ibrahima Niass • Kaolack)
+// PostgreSQL Database Schema for Multi-structure Smart Hospital EHR
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// ÉNUMÉRATIONS DU SYSTÈME
+// ---------------------------------------------------------------------------
+
+enum Role {
+  SUPER_ADMIN
+  STRUCTURE_ADMIN
+  CLINICIAN
+  NURSE
+  SECRETARY
+  LABORATORY
+  VIEWER
+}
+
+enum EntityStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum EpisodeType {
+  OUTPATIENT_CONSULTATION
+  HOSPITALIZATION
+  DAY_HOSPITAL
+  EMERGENCY
+}
+
+enum EpisodeStatus {
+  OPEN
+  CLOSED
+  TRANSFERRED
+}
+
+enum ConsultationStatus {
+  DRAFT
+  SIGNED
+  CANCELLED
+}
+
+enum ExplorationCategory {
+  BIOLOGIE_MEDICALE
+  MICROBIOLOGIE
+  IMAGERIE
+  EFR_FONCTIONNEL
+  ENDOSCOPIE
+  GAZOMETRIE
+  ANAPATH
+}
+
+enum ExplorationPriority {
+  NORMALE
+  URGENTE
+  CRITIQUE
+}
+
+enum ExplorationStatus {
+  REQUESTED
+  ACCEPTED
+  SPECIMEN_COLLECTED
+  IN_PROGRESS
+  RESULT_ENTERED
+  SUBMITTED
+  VALIDATED
+  AMENDED
+  CANCELLED
+  REJECTED
+}
+
+enum ResultStatus {
+  DRAFT
+  SUBMITTED
+  VALIDATED
+  AMENDED
+}
+
+enum DocumentClassification {
+  COMPTE_RENDU_HOSPITALISATION
+  ORDONNANCE
+  CERTIFICAT_MEDICAL
+  BILAN_EXPLORATION
+  CLICHE_IMAGERIE
+  COURRIER_CONFRERE
+}
+
+enum AuditOutcome {
+  SUCCESS
+  DENIED
+  FAILURE
+}
+
+// ---------------------------------------------------------------------------
+// MODÈLES PRINCIPAUX
+// ---------------------------------------------------------------------------
+
+model Structure {
+  id          String       @id @default(uuid())
+  nom         String
+  code        String       @unique
+  adresse     String
+  telephone   String
+  logo        String?
+  statut      EntityStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  services         Service[]
+  users            User[]
+  careEpisodes     CareEpisode[]
+  consultations    Consultation[]
+  explorations     MedicalExploration[]
+  medicalDocuments MedicalDocument[]
+  auditLogs        AuditLog[]
+
+  @@map("structures")
+}
+
+model Service {
+  id          String       @id @default(uuid())
+  structureId String
+  nom         String
+  code        String
+  statut      EntityStatus @default(ACTIVE)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  structure    Structure            @relation(fields: [structureId], references: [id], onDelete: Restrict)
+  users        User[]
+  careEpisodes CareEpisode[]
+  consultations Consultation[]
+  explorations MedicalExploration[]
+
+  @@unique([structureId, code])
+  @@map("services")
+}
+
+model User {
+  id             String       @id @default(uuid())
+  nom            String
+  prenom         String
+  login          String       @unique
+  passwordHash   String
+  role           Role
+  structureId    String
+  serviceId      String?
+  actif          Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  structure      Structure    @relation(fields: [structureId], references: [id], onDelete: Restrict)
+  service        Service?     @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+
+  consultationsPrescribed Consultation[]       @relation("ClinicianConsultations")
+  consultationsSigned     Consultation[]       @relation("SignedByClinician")
+  explorationsRequested   MedicalExploration[] @relation("RequestedBy")
+  explorationsCancelled   MedicalExploration[] @relation("CancelledBy")
+  resultsEntered          ExplorationResult[]  @relation("EnteredBy")
+  resultsValidated        ExplorationResult[]  @relation("ValidatedBy")
+  documentsUploaded       MedicalDocument[]    @relation("UploadedBy")
+  auditLogs               AuditLog[]
+
+  @@index([structureId, role])
+  @@map("users")
+}
+
+model Patient {
+  id                    String    @id @default(uuid())
+  hospitalNumber        String    @unique // Numéro Unique de Dossier Patient (e.g. CHREIN-PNEUMO-2026-0041)
+  nom                   String
+  prenom                String
+  dateNaissance         DateTime?
+  sexe                  String    // M, F
+  telephone             String?
+  adresse               String?
+  profession            String?
+  contactUrgenceNom     String?
+  contactUrgenceTel     String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  careEpisodes     CareEpisode[]
+  consultations    Consultation[]
+  explorations     MedicalExploration[]
+  medicalDocuments MedicalDocument[]
+
+  @@index([nom, prenom])
+  @@index([hospitalNumber])
+  @@map("patients")
+}
+
+model CareEpisode {
+  id             String        @id @default(uuid())
+  patientId      String
+  structureId    String
+  serviceId      String
+  type           EpisodeType
+  dateDebut      DateTime      @default(now())
+  dateFin        DateTime?
+  statut         EpisodeStatus @default(OPEN)
+  responsableId  String
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  patient        Patient       @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  structure      Structure     @relation(fields: [structureId], references: [id], onDelete: Restrict)
+  service        Service       @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+
+  consultations  Consultation[]
+  explorations   MedicalExploration[]
+
+  @@index([patientId, statut])
+  @@map("care_episodes")
+}
+
+model Consultation {
+  id               String             @id @default(uuid())
+  patientId        String
+  episodeId        String?
+  structureId      String
+  serviceId        String
+  clinicianId      String
+  date             DateTime           @default(now())
+  motif            String
+  histoireMaladie  String?
+  antecedents      String?
+  examenClinique   String?
+  resumeSyndromique String?
+  diagnostics      String[]           @default([])
+  conduiteATenir   String?
+  statut           ConsultationStatus @default(DRAFT)
+  signedAt         DateTime?
+  signedById       String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  patient          Patient            @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  episode          CareEpisode?       @relation(fields: [episodeId], references: [id], onDelete: SetNull)
+  structure        Structure          @relation(fields: [structureId], references: [id], onDelete: Restrict)
+  service          Service            @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  clinician        User               @relation("ClinicianConsultations", fields: [clinicianId], references: [id], onDelete: Restrict)
+  signedBy         User?              @relation("SignedByClinician", fields: [signedById], references: [id], onDelete: SetNull)
+
+  explorations     MedicalExploration[]
+  documents        MedicalDocument[]
+
+  @@index([patientId, date])
+  @@map("consultations")
+}
+
+model MedicalExploration {
+  id                   String              @id @default(uuid())
+  requestNumber        String              @unique // Unique e.g. EXP-2026-0041
+  patientId            String
+  episodeId            String?
+  consultationId       String?
+  structureId          String
+  serviceId            String
+  requestedById        String
+  category             ExplorationCategory
+  examType             String              // e.g. "GeneXpert MTB/RIF Ultra"
+  clinicalIndication   String
+  priority             ExplorationPriority @default(NORMALE)
+  requestedAt          DateTime            @default(now())
+  desiredDate          DateTime?
+  status               ExplorationStatus   @default(REQUESTED)
+  specimenType         String?             // e.g. "Crachats purulents matinaux x2"
+  specimenCollectedAt  DateTime?
+  receivedAt           DateTime?
+  performingLaboratory String?             // e.g. "Unité PNT / Laboratoire CHREIN"
+  cancelledAt          DateTime?
+  cancelledById        String?
+  cancellationReason   String?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  patient              Patient             @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  episode              CareEpisode?        @relation(fields: [episodeId], references: [id], onDelete: SetNull)
+  consultation         Consultation?       @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+  structure            Structure           @relation(fields: [structureId], references: [id], onDelete: Restrict)
+  service              Service             @relation(fields: [serviceId], references: [id], onDelete: Restrict)
+  requestedBy          User                @relation("RequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  cancelledBy          User?               @relation("CancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+
+  results              ExplorationResult[]
+  documents            MedicalDocument[]
+
+  @@index([patientId, status])
+  @@index([category, status])
+  @@index([requestNumber])
+  @@map("medical_explorations")
+}
+
+model ExplorationResult {
+  id              String             @id @default(uuid())
+  explorationId   String
+  version         Int                @default(1)
+  structuredData  Json               // Tableau de { parameter, value, unit, referenceInterval, flag }
+  narrativeResult String?
+  conclusion      String?
+  abnormalFlag    Boolean            @default(false)
+  criticalFlag    Boolean            @default(false)
+  amendmentReason String?            // Obligatoire pour les versions > 1
+  enteredById     String
+  enteredAt       DateTime           @default(now())
+  submittedAt     DateTime?
+  validatedById   String?
+  validatedAt     DateTime?
+  status          ResultStatus       @default(DRAFT)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  exploration     MedicalExploration @relation(fields: [explorationId], references: [id], onDelete: Restrict)
+  enteredBy       User               @relation("EnteredBy", fields: [enteredById], references: [id], onDelete: Restrict)
+  validatedBy     User?              @relation("ValidatedBy", fields: [validatedById], references: [id], onDelete: SetNull)
+
+  @@unique([explorationId, version])
+  @@index([explorationId])
+  @@map("exploration_results")
+}
+
+model MedicalDocument {
+  id               String                 @id @default(uuid())
+  patientId        String
+  explorationId    String?
+  consultationId   String?
+  structureId      String
+  originalFilename String
+  storageKey       String                 // Clé de stockage privée chiffrée
+  mimeType         String
+  sizeBytes        Int
+  checksum         String                 // SHA-256 hash pour intégrité
+  uploadedById     String
+  uploadedAt       DateTime               @default(now())
+  classification   DocumentClassification
+  status           EntityStatus           @default(ACTIVE)
+
+  patient          Patient                @relation(fields: [patientId], references: [id], onDelete: Restrict)
+  exploration      MedicalExploration?    @relation(fields: [explorationId], references: [id], onDelete: SetNull)
+  consultation     Consultation?          @relation(fields: [consultationId], references: [id], onDelete: SetNull)
+  structure        Structure              @relation(fields: [structureId], references: [id], onDelete: Restrict)
+  uploadedBy       User                   @relation("UploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([patientId, classification])
+  @@map("medical_documents")
+}
+
+model AuditLog {
+  id            String       @id @default(uuid())
+  userId        String?
+  structureId   String
+  action        String       // e.g. "EXPLORATION_VALIDATED", "AMENDMENT_CREATED"
+  entityType    String       // e.g. "MedicalExploration", "ExplorationResult"
+  entityId      String
+  timestamp     DateTime     @default(now())
+  outcome       AuditOutcome @default(SUCCESS)
+  correlationId String       @default(uuid())
+  metadata      Json?        // Détails minimaux non sensibles
+
+  user          User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  structure     Structure    @relation(fields: [structureId], references: [id], onDelete: Restrict)
+
+  @@index([structureId, timestamp])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
