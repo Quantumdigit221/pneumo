@@ -16,15 +16,21 @@ import {
   AlertCircle,
   FileCheck,
   ChevronRight,
-  Printer
+  Printer,
+  Eye,
+  Edit3,
+  Trash2,
+  RotateCcw
 } from 'lucide-react';
 import { VoiceDictationButton } from '../components/VoiceDictationButton';
+import { SpecializedSheetModal, SPECIALIZED_FORM_CONFIGS } from '../components/SpecializedSheetModal';
 
 export const SpecializedForms: React.FC = () => {
   const {
     patients,
     specializedPneumoRecords,
     saveSpecializedPneumoRecord,
+    deleteSpecializedPneumoRecord,
     currentUser,
     currentCenter
   } = useStore();
@@ -33,6 +39,10 @@ export const SpecializedForms: React.FC = () => {
   const [activeFormType, setActiveFormType] = useState<SpecializedFormType>('TUBERCULOSIS');
   const [formData, setFormData] = useState<Record<string, any>>({});
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [editingRecordId, setEditingRecordId] = useState<string | null>(null);
+  const [previewModalRecord, setPreviewModalRecord] = useState<SpecializedPneumoRecord | null>(null);
+  const [previewModalOpen, setPreviewModalOpen] = useState(false);
+  const [sheetToDelete, setSheetToDelete] = useState<string | null>(null);
 
   const selectedPatient = patients.find(p => p.id === selectedPatientId) || patients[0];
 
@@ -61,17 +71,20 @@ export const SpecializedForms: React.FC = () => {
       ANTIBIOTIC_STEWARDSHIP: 'Fiche de Bon Usage des Antibiotiques (Antibiogouvernance)'
     };
 
+    const targetId = editingRecordId || ('spec-' + Date.now());
+    const existing = specializedPneumoRecords.find(r => r.id === targetId);
+
     const newRecord: SpecializedPneumoRecord = {
-      id: 'spec-' + Date.now(),
+      id: targetId,
       patientId: selectedPatient.id,
       centerId: currentCenter?.id || 'center-1',
-      doctorId: currentUser?.id || 'doc-1',
-      doctorName: currentUser?.name || 'Dr. Pneumologue CHREIN',
+      doctorId: currentUser?.id || existing?.doctorId || 'doc-1',
+      doctorName: currentUser?.name || existing?.doctorName || 'Dr. Pneumologue CHREIN',
       formType: activeFormType,
-      date: new Date().toISOString(),
+      date: existing?.date || new Date().toISOString(),
       title: titles[activeFormType],
       data: formData,
-      createdAt: new Date().toISOString(),
+      createdAt: existing?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
 
@@ -173,6 +186,28 @@ export const SpecializedForms: React.FC = () => {
               </span>
             </div>
           </div>
+
+          {editingRecordId && (
+            <div className="flex items-center justify-between p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  <strong>Mode modification :</strong> Vous éditez une fiche spécialisée existante.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingRecordId(null);
+                  setFormData({});
+                }}
+                className="inline-flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-amber-100 text-amber-800 font-bold text-xxs rounded-lg border border-amber-300 transition cursor-pointer"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Nouveau formulaire vierge</span>
+              </button>
+            </div>
+          )}
 
           <form onSubmit={handleSave} className="space-y-5">
             {/* 1. TUBERCULOSE */}
@@ -620,38 +655,131 @@ export const SpecializedForms: React.FC = () => {
         {/* Right column: Patient's archived specialized records */}
         <div className="lg:col-span-4 space-y-4">
           <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
-            <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
-              <FileCheck className="w-4 h-4 text-teal-600" />
-              <span>Fiches Spécialisées du Patient ({patientRecords.length})</span>
-            </h3>
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                <FileCheck className="w-4 h-4 text-teal-600" />
+                <span>Fiches du Patient ({patientRecords.length})</span>
+              </h3>
+            </div>
 
             {patientRecords.length === 0 ? (
               <p className="text-xs text-slate-400 italic py-2">
                 Aucune fiche spécialisée enregistrée pour ce dossier.
               </p>
             ) : (
-              <div className="divide-y divide-slate-100 max-h-[500px] overflow-y-auto">
-                {patientRecords.map(rec => (
-                  <div key={rec.id} className="py-3 text-xs space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-800">{rec.title}</span>
-                      <span className="text-xxs px-2 py-0.5 rounded-full bg-slate-100 font-mono text-slate-600">
-                        {new Date(rec.date).toLocaleDateString('fr-FR')}
-                      </span>
+              <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
+                {patientRecords.map(rec => {
+                  const cfg = SPECIALIZED_FORM_CONFIGS[rec.formType] || SPECIALIZED_FORM_CONFIGS.TUBERCULOSIS;
+                  return (
+                    <div
+                      key={rec.id}
+                      className={`p-3 rounded-xl border transition text-xs space-y-2 ${
+                        editingRecordId === rec.id
+                          ? 'border-amber-400 bg-amber-50/40 ring-1 ring-amber-400'
+                          : 'border-slate-200 bg-slate-50/70 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="space-y-0.5">
+                          <span className={`text-3xs font-extrabold uppercase px-1.5 py-0.5 rounded border inline-block ${cfg.color}`}>
+                            {cfg.badge}
+                          </span>
+                          <h4 className="font-bold text-slate-900 leading-tight">{rec.title}</h4>
+                          <span className="text-xxs text-slate-400 font-mono block">
+                            {new Date(rec.date).toLocaleDateString('fr-FR')} • {rec.doctorName}
+                          </span>
+                        </div>
+
+                        {/* Action buttons */}
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPreviewModalRecord(rec);
+                              setPreviewModalOpen(true);
+                            }}
+                            className="p-1.5 text-slate-500 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition cursor-pointer"
+                            title="Consulter et Imprimer A4"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingRecordId(rec.id);
+                              setActiveFormType(rec.formType);
+                              setFormData(rec.data || {});
+                              window.scrollTo({ top: 150, behavior: 'smooth' });
+                            }}
+                            className="p-1.5 text-slate-500 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition cursor-pointer"
+                            title="Modifier dans le formulaire"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                          </button>
+
+                          {sheetToDelete === rec.id ? (
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  await deleteSpecializedPneumoRecord(rec.id);
+                                  if (editingRecordId === rec.id) {
+                                    setEditingRecordId(null);
+                                    setFormData({});
+                                  }
+                                  setSheetToDelete(null);
+                                }}
+                                className="px-1.5 py-0.5 bg-rose-600 text-white rounded text-3xs font-bold"
+                              >
+                                Oui
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setSheetToDelete(null)}
+                                className="px-1.5 py-0.5 bg-slate-200 text-slate-700 rounded text-3xs"
+                              >
+                                Non
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setSheetToDelete(rec.id)}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                              title="Supprimer la fiche"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Brief clinical summary */}
+                      {rec.data?.clinicalSynthesis && (
+                        <p className="text-xxs text-slate-600 bg-white p-2 rounded-lg border border-slate-100 line-clamp-2 italic">
+                          « {rec.data.clinicalSynthesis} »
+                        </p>
+                      )}
                     </div>
-                    <p className="text-xxs text-slate-500">
-                      Rédigé par : {rec.doctorName}
-                    </p>
-                    <div className="text-xxs text-slate-600 bg-slate-50 p-2 rounded-lg font-mono truncate">
-                      {JSON.stringify(rec.data).slice(0, 80)}...
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {/* Preview & Print Modal */}
+      {selectedPatient && previewModalOpen && previewModalRecord && (
+        <SpecializedSheetModal
+          isOpen={previewModalOpen}
+          onClose={() => setPreviewModalOpen(false)}
+          record={previewModalRecord}
+          patient={selectedPatient}
+          initialMode="view"
+        />
+      )}
     </div>
   );
 };

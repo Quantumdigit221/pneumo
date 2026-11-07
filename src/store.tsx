@@ -144,10 +144,10 @@ const MOCK_USERS: User[] = [
 ];
 
 const MOCK_SERVICES: Service[] = [
-  { id: 's1', centerId: 'center-1', name: 'Consultation Spécialisée Pneumologie', category: 'Consultation', price: 0, isActive: true },
-  { id: 's2', centerId: 'center-1', name: 'Spirométrie / EFR avec test de réversibilité', category: 'Exploration', price: 0, isActive: true },
-  { id: 's3', centerId: 'center-1', name: 'Ponction Pleurale Écho-guidée', category: 'Geste', price: 0, isActive: true },
-  { id: 's4', centerId: 'center-1', name: 'Gazométrie Artérielle', category: 'Exploration', price: 0, isActive: true }
+  { id: 's1', centerId: 'center-1', name: 'Consultation Spécialisée Pneumologie', category: 'Consultation', price: 0, emergencyPrice: 0, ipmPrice: 0, insurancePrice: 0, durationMinutes: 20, isActive: true },
+  { id: 's2', centerId: 'center-1', name: 'Spirométrie / EFR avec test de réversibilité', category: 'Exploration', price: 0, emergencyPrice: 0, ipmPrice: 0, insurancePrice: 0, durationMinutes: 30, isActive: true },
+  { id: 's3', centerId: 'center-1', name: 'Ponction Pleurale Écho-guidée', category: 'Geste', price: 0, emergencyPrice: 0, ipmPrice: 0, insurancePrice: 0, durationMinutes: 45, isActive: true },
+  { id: 's4', centerId: 'center-1', name: 'Gazométrie Artérielle', category: 'Exploration', price: 0, emergencyPrice: 0, ipmPrice: 0, insurancePrice: 0, durationMinutes: 15, isActive: true }
 ];
 
 const MOCK_MEDICINES: Medicine[] = [
@@ -448,6 +448,30 @@ const MOCK_HOSPITALIZATIONS: Hospitalization[] = [
     medications: [
       { medicineName: 'Nébulisation Salbutamol/Ipratropium', dosage: '5mg/0.5mg', frequency: 'Toutes les 6h' },
       { medicineName: 'Méthylprednisolone IV', dosage: '40mg/j', frequency: 'Pendant 5 jours' }
+    ]
+  },
+  {
+    id: 'h3',
+    centerId: 'center-1',
+    patientId: 'p6',
+    patientName: 'Abdoulaye Guèye',
+    patientGender: 'M',
+    patientAge: 67,
+    bedId: 'b5',
+    roomNumber: 'Lit 301 (Pneumo Hommes)',
+    doctorName: 'Dr. Cheikh Ndao',
+    reason: 'Pneumonie Aiguë Communautaire bactérienne sévère (CURB-65 = 3), polypnée et désaturation sous oxygénothérapie',
+    admissionDiagnoses: [
+      { id: 'd3', codeCIM11: 'CA40.0', label: 'Pneumonie bactérienne sévère communautaire', type: 'PRINCIPAL', status: 'CONFIRME', dateDiagnosed: '2026-10-21' }
+    ],
+    admissionDate: new Date(Date.now() - 3600000 * 24).toISOString().split('T')[0],
+    status: 'active',
+    dailyNotes: [
+      { date: new Date().toISOString().split('T')[0], note: 'Patient sous O2 à 4 L/min par lunettes. SpO2 à 95%. Apyrétique sous Ceftriaxone IV + Macrolide.', author: 'Dr. Cheikh Ndao' }
+    ],
+    medications: [
+      { medicineName: 'Ceftriaxone 1g Injectable', dosage: '2g/jour en perfusion', frequency: 'Quotidien' },
+      { medicineName: 'Clarithromycine 500mg', dosage: '500mg x 2/jour', frequency: 'Matin et Soir' }
     ]
   }
 ];
@@ -1305,6 +1329,7 @@ interface AppState {
 
 interface AppContextType extends AppState {
   saveSpecializedPneumoRecord: (rec: SpecializedPneumoRecord) => void;
+  deleteSpecializedPneumoRecord: (id: string) => void;
   saveClinicalScoreCalculation: (rec: ClinicalScoreCalculation) => void;
   addNurseVitalRecord: (rec: NurseVitalRecord) => void;
   addNurseRespiratoryRecord: (rec: NurseRespiratoryRecord) => void;
@@ -1409,7 +1434,20 @@ function loadInitialState<T>(tableName: string, fallback: T[]): T[] {
     const saved = localStorage.getItem(`offline_${tableName}`);
     if (saved) {
       const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        if (tableName === 'hospitalizations' || tableName === 'beds' || tableName === 'specialized_pneumo') {
+          const existingIds = new Set(parsed.map((x: any) => x.id));
+          const missingFallback = (fallback as any[]).filter(x => !existingIds.has(x.id));
+          if (missingFallback.length > 0) {
+            const merged = [...parsed, ...missingFallback];
+            try {
+              localStorage.setItem(`offline_${tableName}`, JSON.stringify(merged));
+            } catch (_) {}
+            return merged;
+          }
+        }
+        return parsed;
+      }
     }
   } catch {}
   return fallback;
@@ -1644,7 +1682,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         { name: 'hospitalizations', setter: setHospitalizations, mock: MOCK_HOSPITALIZATIONS },
         { name: 'mutuals', setter: setMutuals, mock: PARTNER_MUTUALS },
         { name: 'expenses', setter: setExpenses, mock: [] },
-        { name: 'bank_transfers', setter: setBankTransfers, mock: MOCK_BANK_TRANSFERS }
+        { name: 'bank_transfers', setter: setBankTransfers, mock: MOCK_BANK_TRANSFERS },
+        { name: 'specialized_pneumo', setter: setSpecializedPneumoRecords, mock: MOCK_SPECIALIZED_RECORDS }
       ];
 
       // Concurrent fetch: verify status and retrieve all table datasets simultaneously
@@ -1735,6 +1774,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       case 'beds': return beds;
       case 'hospitalizations': return hospitalizations;
       case 'expenses': return expensesRaw;
+      case 'specialized_pneumo': return specializedPneumoRecords;
       default: return [];
     }
   };
@@ -1758,7 +1798,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const dbWrite = async (tableName: string, id: string, docData: any) => {
     const tablesRequiringCenterId = [
       'patients', 'tickets', 'services', 'medicines', 'sales',
-      'consultations', 'lab_results', 'appointments', 'beds', 'hospitalizations', 'expenses'
+      'consultations', 'lab_results', 'appointments', 'beds', 'hospitalizations', 'expenses', 'specialized_pneumo'
     ];
     let preparedData = { ...docData };
     if (tablesRequiringCenterId.includes(tableName)) {
@@ -1803,7 +1843,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const merged = { ...original, ...changedFields, id };
     const tablesRequiringCenterId = [
       'patients', 'tickets', 'services', 'medicines', 'sales',
-      'consultations', 'lab_results', 'appointments', 'beds', 'hospitalizations', 'expenses'
+      'consultations', 'lab_results', 'appointments', 'beds', 'hospitalizations', 'expenses', 'specialized_pneumo'
     ];
     if (tablesRequiringCenterId.includes(tableName)) {
       if (!merged.centerId) {
@@ -2301,8 +2341,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const addService = async (serviceData: Omit<Service, 'id' | 'centerId'>) => {
     try {
       const serviceId = `service-${Date.now()}`;
+      const stdPrice = Number(serviceData.price || 0);
       const newService: Service = {
         ...serviceData,
+        price: stdPrice,
+        emergencyPrice: Number(serviceData.emergencyPrice ?? stdPrice),
+        ipmPrice: Number(serviceData.ipmPrice ?? stdPrice),
+        insurancePrice: Number(serviceData.insurancePrice ?? stdPrice),
+        durationMinutes: Number(serviceData.durationMinutes || 15),
+        isActive: serviceData.isActive !== undefined ? serviceData.isActive : true,
         id: serviceId,
         centerId: currentCenter?.id || 'center-1'
       };
@@ -3149,12 +3196,40 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const filteredBankTransfers = useMemo(() => (isSuperAdmin && !currentCenter) ? bankTransfersRaw : bankTransfersRaw.filter(t => t.centerId === activeCenterId), [isSuperAdmin, currentCenter, bankTransfersRaw, activeCenterId]);
   const filteredUsers = useMemo(() => (isSuperAdmin && !currentCenter) ? users : users.filter(u => u.centerId === activeCenterId && u.role !== Role.SUPER_ADMIN), [isSuperAdmin, currentCenter, users, activeCenterId]);
 
-  const saveSpecializedPneumoRecord = (rec: SpecializedPneumoRecord) => {
+  const saveSpecializedPneumoRecord = async (rec: SpecializedPneumoRecord) => {
     setSpecializedPneumoRecords(prev => {
       const updated = [rec, ...prev.filter(r => r.id !== rec.id)];
-      localStorage.setItem('offline_specialized_pneumo', JSON.stringify(updated));
+      saveToLocalCache('specialized_pneumo', updated);
       return updated;
     });
+    if (useHostinger) {
+      try {
+        await fetch('/api/mysql/write/specialized_pneumo', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(rec)
+        });
+      } catch (err) {
+        console.warn("[Hostinger MySQL] Écriture différée sur specialized_pneumo:", err);
+      }
+    }
+  };
+
+  const deleteSpecializedPneumoRecord = async (id: string) => {
+    setSpecializedPneumoRecords(prev => {
+      const updated = prev.filter(r => r.id !== id);
+      saveToLocalCache('specialized_pneumo', updated);
+      return updated;
+    });
+    if (useHostinger) {
+      try {
+        await fetch(`/api/mysql/delete/specialized_pneumo/${id}`, {
+          method: 'DELETE'
+        });
+      } catch (err) {
+        console.warn("[Hostinger MySQL] Suppression différée sur specialized_pneumo:", err);
+      }
+    }
   };
 
   const saveClinicalScoreCalculation = (rec: ClinicalScoreCalculation) => {
@@ -3270,6 +3345,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     medicalExplorations,
     medicalDocuments,
     saveSpecializedPneumoRecord,
+    deleteSpecializedPneumoRecord,
     saveClinicalScoreCalculation,
     addNurseVitalRecord,
     addNurseRespiratoryRecord,

@@ -1421,7 +1421,8 @@ Règles strictes :
       const tables = [
         'centers', 'users', 'patients', 'tickets', 'services', 
         'medicines', 'sales', 'consultations', 'lab_results', 
-        'appointments', 'beds', 'hospitalizations', 'mutuals', 'expenses'
+        'appointments', 'beds', 'hospitalizations', 'mutuals', 'expenses',
+        'bank_transfers', 'specialized_pneumo'
       ];
       const results: Record<string, any[]> = {};
       await Promise.all(tables.map(async (table) => {

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useStore } from '../store';
-import { Patient } from '../types';
+import { Patient, SpecializedPneumoRecord } from '../types';
 import {
   Users,
   Search,
@@ -22,9 +22,15 @@ import {
   UserCheck,
   TrendingUp,
   FileSpreadsheet,
-  ArrowRight
+  ArrowRight,
+  Eye,
+  Edit3,
+  Trash2,
+  Microscope,
+  Pill
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { SpecializedSheetModal, SPECIALIZED_FORM_CONFIGS } from '../components/SpecializedSheetModal';
 
 export const Patients: React.FC = () => {
   const {
@@ -34,6 +40,7 @@ export const Patients: React.FC = () => {
     consultations,
     hospitalizations,
     specializedPneumoRecords,
+    deleteSpecializedPneumoRecord,
     clinicalScoreCalculations,
     medicalExplorations,
     medicalDocuments,
@@ -45,6 +52,13 @@ export const Patients: React.FC = () => {
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(patients[0]?.id || null);
   const [activeTab, setActiveTab] = useState<'info' | 'consultations' | 'hospitalizations' | 'specialized' | 'scores' | 'explorations' | 'documents'>('info');
   const [showNewPatientModal, setShowNewPatientModal] = useState(false);
+
+  // Specialized sheets modal state
+  const [selectedSpecializedRecord, setSelectedSpecializedRecord] = useState<SpecializedPneumoRecord | null>(null);
+  const [specializedModalOpen, setSpecializedModalOpen] = useState(false);
+  const [specializedModalMode, setSpecializedModalMode] = useState<'view' | 'edit' | 'create' | 'print'>('view');
+  const [specializedFilter, setSpecializedFilter] = useState<string>('ALL');
+  const [sheetToDelete, setSheetToDelete] = useState<string | null>(null);
 
   // New patient modal state
   const [newPatientForm, setNewPatientForm] = useState({
@@ -391,24 +405,350 @@ export const Patients: React.FC = () => {
 
               {/* TAB 4: FICHES SPÉCIALISÉES */}
               {activeTab === 'specialized' && (
-                <div className="space-y-3">
-                  {patientSpecialized.length === 0 ? (
-                    <p className="text-xs text-slate-400 italic py-4">Aucune fiche spécialisée rédigée.</p>
-                  ) : (
-                    patientSpecialized.map(r => (
-                      <div key={r.id} className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-slate-800">{r.title}</span>
-                          <span className="text-xxs font-mono text-slate-500">
-                            {new Date(r.date).toLocaleDateString('fr-FR')}
-                          </span>
-                        </div>
-                        <p className="text-xxs text-slate-600 font-mono bg-white p-2 rounded border border-slate-100">
-                          {JSON.stringify(r.data)}
-                        </p>
+                <div className="space-y-4">
+                  {/* Top Bar inside Tab */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-teal-50/60 border border-teal-100 rounded-2xl">
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black text-teal-950 uppercase tracking-wide">
+                          Protocoles Spécialisés & Fiches Cliniques
+                        </span>
+                        <span className="text-xxs font-mono font-bold px-2 py-0.5 bg-teal-600 text-white rounded-full">
+                          {patientSpecialized.length} fiche{patientSpecialized.length > 1 ? 's' : ''}
+                        </span>
                       </div>
-                    ))
+                      <p className="text-xxs text-slate-600">
+                        Protocoles standardisés : Tuberculose (PNT), BPCO GOLD, Asthme GINA, Séquelles TB, PID, DDB, Pleurésie & Antibiogouvernance.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedSpecializedRecord(null);
+                        setSpecializedModalMode('create');
+                        setSpecializedModalOpen(true);
+                      }}
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs rounded-xl shadow-xs transition cursor-pointer self-start sm:self-auto shrink-0"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Rédiger une Fiche Spécialisée</span>
+                    </button>
+                  </div>
+
+                  {/* Filter Pills */}
+                  {patientSpecialized.length > 0 && (
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xxs font-bold">
+                      {[
+                        { id: 'ALL', label: `Toutes (${patientSpecialized.length})` },
+                        { id: 'TUBERCULOSIS', label: 'Tuberculose' },
+                        { id: 'COPD', label: 'BPCO' },
+                        { id: 'ASTHMA', label: 'Asthme' },
+                        { id: 'TB_SEQUELAE', label: 'Séquelles TB' },
+                        { id: 'PID_IPAF', label: 'PID & Fibroses' },
+                        { id: 'BRONCHIECTASIS', label: 'DDB' },
+                        { id: 'PLEURAL_DISEASE', label: 'Pleurésie' },
+                        { id: 'ANTIBIOTIC_STEWARDSHIP', label: 'Bon Usage ATB' }
+                      ].map(f => (
+                        <button
+                          key={f.id}
+                          type="button"
+                          onClick={() => setSpecializedFilter(f.id)}
+                          className={`px-3 py-1.5 rounded-lg whitespace-nowrap transition cursor-pointer ${
+                            specializedFilter === f.id
+                              ? 'bg-slate-800 text-white shadow-xs'
+                              : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                          }`}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
                   )}
+
+                  {/* Fiches List */}
+                  {(() => {
+                    const filtered = patientSpecialized.filter(r => {
+                      if (specializedFilter === 'ALL') return true;
+                      return r.formType === specializedFilter;
+                    });
+
+                    if (filtered.length === 0) {
+                      return (
+                        <div className="p-8 text-center bg-slate-50 border border-dashed border-slate-200 rounded-2xl space-y-3">
+                          <div className="w-12 h-12 mx-auto rounded-full bg-teal-50 border border-teal-100 flex items-center justify-center text-teal-600">
+                            <Wind className="w-6 h-6" />
+                          </div>
+                          <div className="space-y-1">
+                            <p className="text-xs font-bold text-slate-700">
+                              {specializedFilter === 'ALL'
+                                ? 'Aucune fiche spécialisée rédigée pour ce patient'
+                                : 'Aucune fiche pour cette catégorie'}
+                            </p>
+                            <p className="text-xxs text-slate-500 max-w-sm mx-auto">
+                              Rédigez une évaluation protocolisée pour assurer la continuité des soins et le suivi pneumologique.
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedSpecializedRecord(null);
+                              setSpecializedModalMode('create');
+                              setSpecializedModalOpen(true);
+                            }}
+                            className="inline-flex items-center gap-1.5 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs rounded-xl shadow-xs transition cursor-pointer"
+                          >
+                            <Plus className="w-4 h-4" />
+                            <span>Rédiger une fiche</span>
+                          </button>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="space-y-3">
+                        {filtered.map(r => {
+                          const cfg = SPECIALIZED_FORM_CONFIGS[r.formType] || SPECIALIZED_FORM_CONFIGS.TUBERCULOSIS;
+                          return (
+                            <div
+                              key={r.id}
+                              className="bg-white rounded-2xl border border-slate-200 shadow-xs hover:border-slate-300 transition p-4 space-y-3"
+                            >
+                              {/* Header Card */}
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+                                <div className="flex items-center gap-2.5">
+                                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center border shrink-0 ${cfg.color}`}>
+                                    {cfg.icon}
+                                  </div>
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <h4 className="text-xs font-black text-slate-900">{r.title}</h4>
+                                      <span className={`text-3xs font-extrabold uppercase px-2 py-0.5 rounded border ${cfg.color}`}>
+                                        {cfg.badge}
+                                      </span>
+                                    </div>
+                                    <p className="text-xxs text-slate-500">
+                                      Évalué le <strong className="text-slate-700">{new Date(r.date).toLocaleDateString('fr-FR')}</strong> • Par {r.doctorName}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                {/* Action Buttons */}
+                                <div className="flex items-center gap-1.5 self-end sm:self-auto shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedSpecializedRecord(r);
+                                      setSpecializedModalMode('view');
+                                      setSpecializedModalOpen(true);
+                                    }}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xxs rounded-lg transition cursor-pointer"
+                                    title="Consulter les détails"
+                                  >
+                                    <Eye className="w-3.5 h-3.5 text-teal-600" />
+                                    <span>Consulter</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedSpecializedRecord(r);
+                                      setSpecializedModalMode('view');
+                                      setSpecializedModalOpen(true);
+                                      setTimeout(() => window.print(), 350);
+                                    }}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xxs rounded-lg transition cursor-pointer"
+                                    title="Imprimer au format A4"
+                                  >
+                                    <Printer className="w-3.5 h-3.5 text-slate-600" />
+                                    <span>Imprimer A4</span>
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedSpecializedRecord(r);
+                                      setSpecializedModalMode('edit');
+                                      setSpecializedModalOpen(true);
+                                    }}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-teal-50 hover:bg-teal-100 text-teal-700 font-bold text-xxs rounded-lg border border-teal-200 transition cursor-pointer"
+                                    title="Modifier la fiche"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                    <span>Modifier</span>
+                                  </button>
+
+                                  {sheetToDelete === r.id ? (
+                                    <div className="flex items-center gap-1">
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          await deleteSpecializedPneumoRecord(r.id);
+                                          setSheetToDelete(null);
+                                        }}
+                                        className="px-2 py-1 bg-rose-600 text-white rounded text-3xs font-bold"
+                                      >
+                                        Oui
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setSheetToDelete(null)}
+                                        className="px-2 py-1 bg-slate-200 text-slate-700 rounded text-3xs font-semibold"
+                                      >
+                                        Non
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => setSheetToDelete(r.id)}
+                                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                                      title="Supprimer la fiche"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Key Clinical Badges */}
+                              <div className="flex flex-wrap gap-2 text-xxs">
+                                {r.formType === 'TUBERCULOSIS' && (
+                                  <>
+                                    <span className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-700 font-medium">
+                                      Forme : <strong>{r.data?.tbForm || 'TPM+'}</strong>
+                                    </span>
+                                    <span className={`px-2.5 py-1 rounded-md font-bold ${
+                                      (r.data?.genexpertResult || '').includes('RES') ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
+                                    }`}>
+                                      GeneXpert : {r.data?.genexpertResult || 'Sensible RIF'}
+                                    </span>
+                                    <span className="px-2.5 py-1 rounded-md bg-teal-50 text-teal-800 font-mono font-bold">
+                                      Régime : {r.data?.regimen || '2RHZE/4RH'}
+                                    </span>
+                                    {r.data?.adherence && (
+                                      <span className="px-2.5 py-1 rounded-md bg-blue-50 text-blue-800 font-medium">
+                                        Observance : {r.data.adherence}
+                                      </span>
+                                    )}
+                                  </>
+                                )}
+
+                                {r.formType === 'COPD' && (
+                                  <>
+                                    <span className="px-2.5 py-1 rounded-md bg-amber-50 text-amber-800 font-bold">
+                                      {r.data?.packYears || 0} Paquets-Années
+                                    </span>
+                                    <span className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-700 font-bold">
+                                      Stade : {r.data?.goldStage || 'GOLD 2'}
+                                    </span>
+                                    <span className="px-2.5 py-1 rounded-md bg-indigo-50 text-indigo-800 font-bold">
+                                      {r.data?.goldGroup || 'Groupe E'}
+                                    </span>
+                                    {r.data?.mmrcScore !== undefined && (
+                                      <span className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-700">
+                                        mMRC : Stade {r.data.mmrcScore}
+                                      </span>
+                                    )}
+                                  </>
+                                )}
+
+                                {r.formType === 'ASTHMA' && (
+                                  <>
+                                    <span className="px-2.5 py-1 rounded-md bg-emerald-100 text-emerald-800 font-bold">
+                                      Contrôle : {r.data?.ginaControl || 'Bien contrôlé'}
+                                    </span>
+                                    <span className="px-2.5 py-1 rounded-md bg-teal-50 text-teal-800 font-bold">
+                                      {r.data?.ginaStep || 'Palier 3'}
+                                    </span>
+                                    {r.data?.peakFlow && (
+                                      <span className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-800 font-mono font-bold">
+                                        DEP : {r.data.peakFlow} L/min
+                                      </span>
+                                    )}
+                                  </>
+                                )}
+
+                                {r.formType === 'TB_SEQUELAE' && (
+                                  <>
+                                    <span className="px-2.5 py-1 rounded-md bg-indigo-100 text-indigo-800 font-bold">
+                                      6MWT : {r.data?.walkDistance ? `${r.data.walkDistance} m` : 'Mesuré'}
+                                    </span>
+                                    {r.data?.minSpo2 && (
+                                      <span className="px-2.5 py-1 rounded-md bg-rose-100 text-rose-800 font-mono font-bold">
+                                        SpO2 min : {r.data.minSpo2}%
+                                      </span>
+                                    )}
+                                    <span className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-700">
+                                      Séquelles : {r.data?.sequelaeType || 'DDB post-TB'}
+                                    </span>
+                                  </>
+                                )}
+
+                                {r.formType === 'PID_IPAF' && (
+                                  <>
+                                    <span className="px-2.5 py-1 rounded-md bg-purple-100 text-purple-800 font-bold">
+                                      Auscultation : {r.data?.auscultation || 'Râles velcro'}
+                                    </span>
+                                    {r.data?.hrctPattern && (
+                                      <span className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-700">
+                                        HRCT : {r.data.hrctPattern}
+                                      </span>
+                                    )}
+                                  </>
+                                )}
+
+                                {r.formType === 'BRONCHIECTASIS' && (
+                                  <>
+                                    <span className="px-2.5 py-1 rounded-md bg-cyan-100 text-cyan-800 font-bold">
+                                      Expectoration : {r.data?.sputumVolume || '30ml/j'}
+                                    </span>
+                                    <span className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-700">
+                                      ECBC : {r.data?.colonization || 'Non colonisé'}
+                                    </span>
+                                  </>
+                                )}
+
+                                {r.formType === 'PLEURAL_DISEASE' && (
+                                  <>
+                                    <span className="px-2.5 py-1 rounded-md bg-blue-100 text-blue-800 font-bold">
+                                      Côté : {r.data?.pleuralSide || 'Droit'}
+                                    </span>
+                                    <span className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-700">
+                                      Aspect : {r.data?.fluidAspect || 'Citrin'}
+                                    </span>
+                                    {r.data?.fluidChemistry && (
+                                      <span className="px-2.5 py-1 rounded-md bg-teal-50 text-teal-800 font-mono">
+                                        {r.data.fluidChemistry}
+                                      </span>
+                                    )}
+                                  </>
+                                )}
+
+                                {r.formType === 'ANTIBIOTIC_STEWARDSHIP' && (
+                                  <>
+                                    <span className="px-2.5 py-1 rounded-md bg-teal-100 text-teal-800 font-bold">
+                                      Molécule : {r.data?.antibioticMolecule || 'Ceftriaxone'}
+                                    </span>
+                                    <span className="px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-800 font-medium">
+                                      48-72h : {r.data?.reassessment || 'Évalué'}
+                                    </span>
+                                  </>
+                                )}
+                              </div>
+
+                              {/* Clinical Synthesis Quote */}
+                              {r.data?.clinicalSynthesis && (
+                                <div className="text-xxs text-slate-600 bg-slate-50 p-2.5 rounded-xl border border-slate-100 italic">
+                                  « {r.data.clinicalSynthesis} »
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
 
@@ -694,6 +1034,17 @@ export const Patients: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Specialized Sheet Modal (Consultation, Edition, Creation, Impression A4) */}
+      {selectedPatient && specializedModalOpen && (
+        <SpecializedSheetModal
+          isOpen={specializedModalOpen}
+          onClose={() => setSpecializedModalOpen(false)}
+          record={selectedSpecializedRecord}
+          patient={selectedPatient}
+          initialMode={specializedModalMode}
+        />
       )}
     </div>
   );

@@ -244,14 +244,43 @@ export async function ensureTablesExist(force: boolean = false) {
         centerId VARCHAR(50) NOT NULL,
         name VARCHAR(255) NOT NULL,
         category VARCHAR(100) NOT NULL,
-        price DECIMAL(10, 2) NOT NULL,
-        emergencyPrice DECIMAL(10, 2) NOT NULL,
+        price DECIMAL(10, 2) NOT NULL DEFAULT 0,
+        emergencyPrice DECIMAL(10, 2) NOT NULL DEFAULT 0,
         ipmPrice DECIMAL(10, 2) NOT NULL DEFAULT 0,
         insurancePrice DECIMAL(10, 2) NOT NULL DEFAULT 0,
-        durationMinutes INT,
+        durationMinutes INT DEFAULT 15,
         isActive TINYINT(1) DEFAULT 1
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+
+    // Ensure columns exist and have DEFAULT 0 on existing tables to avoid ER_BAD_NULL_ERROR
+    try {
+      await connection.query(`ALTER TABLE services ADD COLUMN IF NOT EXISTS emergencyPrice DECIMAL(10, 2) NOT NULL DEFAULT 0;`);
+    } catch (_) {
+      try {
+        await connection.query(`ALTER TABLE services ADD COLUMN emergencyPrice DECIMAL(10, 2) NOT NULL DEFAULT 0;`);
+      } catch (_) {}
+    }
+
+    try {
+      await connection.query(`UPDATE services SET emergencyPrice = 0 WHERE emergencyPrice IS NULL;`);
+    } catch (_) {}
+
+    try {
+      await connection.query(`ALTER TABLE services MODIFY COLUMN emergencyPrice DECIMAL(10, 2) NOT NULL DEFAULT 0;`);
+    } catch (_) {
+      try {
+        await connection.query(`ALTER TABLE services MODIFY COLUMN emergencyPrice DECIMAL(10, 2) DEFAULT 0;`);
+      } catch (_) {}
+    }
+
+    try {
+      await connection.query(`UPDATE services SET price = 0 WHERE price IS NULL;`);
+    } catch (_) {}
+
+    try {
+      await connection.query(`ALTER TABLE services MODIFY COLUMN price DECIMAL(10, 2) NOT NULL DEFAULT 0;`);
+    } catch (_) {}
 
     // Ensure ipmPrice and insurancePrice columns exist in services table for existing databases
     try {
@@ -267,6 +296,14 @@ export async function ensureTablesExist(force: boolean = false) {
     }
 
     try {
+      await connection.query(`UPDATE services SET ipmPrice = 0 WHERE ipmPrice IS NULL;`);
+    } catch (_) {}
+
+    try {
+      await connection.query(`ALTER TABLE services MODIFY COLUMN ipmPrice DECIMAL(10, 2) NOT NULL DEFAULT 0;`);
+    } catch (_) {}
+
+    try {
       await connection.query(`
         ALTER TABLE services ADD COLUMN IF NOT EXISTS insurancePrice DECIMAL(10, 2) NOT NULL DEFAULT 0;
       `);
@@ -277,6 +314,14 @@ export async function ensureTablesExist(force: boolean = false) {
         `);
       } catch (_) {}
     }
+
+    try {
+      await connection.query(`UPDATE services SET insurancePrice = 0 WHERE insurancePrice IS NULL;`);
+    } catch (_) {}
+
+    try {
+      await connection.query(`ALTER TABLE services MODIFY COLUMN insurancePrice DECIMAL(10, 2) NOT NULL DEFAULT 0;`);
+    } catch (_) {}
 
     // 6. Medicines Table
     await connection.query(`
@@ -479,6 +524,23 @@ export async function ensureTablesExist(force: boolean = false) {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
 
+    // 16. Specialized Pneumo Records Table
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS specialized_pneumo (
+        id VARCHAR(50) PRIMARY KEY,
+        centerId VARCHAR(50) NOT NULL,
+        patientId VARCHAR(50) NOT NULL,
+        doctorId VARCHAR(50) NOT NULL,
+        doctorName VARCHAR(255) NOT NULL,
+        formType VARCHAR(100) NOT NULL,
+        date VARCHAR(100) NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        data LONGTEXT NULL,
+        createdAt VARCHAR(100) NOT NULL,
+        updatedAt VARCHAR(100)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+
     tablesEnsured = true;
     console.log("[Hostinger MySQL] Toutes les tables requises ont été vérifiées/créées avec succès.");
   } catch (err) {
@@ -525,6 +587,8 @@ function getTableColumns(tableName: string): string[] {
       return ['id', 'centerId', 'title', 'category', 'amount', 'date', 'description', 'paymentMethod', 'createdBy', 'createdAt', 'receiptName', 'receiptData'];
     case 'bank_transfers':
       return ['id', 'centerId', 'amount', 'method', 'bankName', 'accountNumber', 'referenceNumber', 'date', 'notes', 'receiptName', 'receiptData', 'createdBy', 'createdAt'];
+    case 'specialized_pneumo':
+      return ['id', 'centerId', 'patientId', 'doctorId', 'doctorName', 'formType', 'date', 'title', 'data', 'createdAt', 'updatedAt'];
     default:
       return [];
   }
@@ -536,7 +600,7 @@ export async function queryAll(tableName: string): Promise<any[]> {
   if (!activePool) return [];
 
   // Allowed tables whitelist for security
-  const whitelist = ['centers', 'users', 'patients', 'tickets', 'services', 'medicines', 'sales', 'consultations', 'lab_results', 'appointments', 'beds', 'hospitalizations', 'mutuals', 'expenses', 'bank_transfers'];
+  const whitelist = ['centers', 'users', 'patients', 'tickets', 'services', 'medicines', 'sales', 'consultations', 'lab_results', 'appointments', 'beds', 'hospitalizations', 'mutuals', 'expenses', 'bank_transfers', 'specialized_pneumo'];
   if (!whitelist.includes(tableName)) {
     throw new Error(`Table non autorisée : ${tableName}`);
   }
@@ -576,6 +640,16 @@ export async function queryAll(tableName: string): Promise<any[]> {
             row.medications = JSON.parse(row.medications);
           } catch (e) {
             row.medications = [];
+          }
+        }
+      }
+
+      if (tableName === 'specialized_pneumo') {
+        if (row.data && typeof row.data === 'string') {
+          try {
+            row.data = JSON.parse(row.data);
+          } catch (e) {
+            row.data = {};
           }
         }
       }
@@ -623,7 +697,7 @@ export async function saveItem(tableName: string, item: any): Promise<boolean> {
   const activePool = await getMysqlPool();
   if (!activePool) return false;
 
-  const whitelist = ['centers', 'users', 'patients', 'tickets', 'services', 'medicines', 'sales', 'consultations', 'lab_results', 'appointments', 'beds', 'hospitalizations', 'mutuals', 'expenses', 'bank_transfers'];
+  const whitelist = ['centers', 'users', 'patients', 'tickets', 'services', 'medicines', 'sales', 'consultations', 'lab_results', 'appointments', 'beds', 'hospitalizations', 'mutuals', 'expenses', 'bank_transfers', 'specialized_pneumo'];
   if (!whitelist.includes(tableName)) {
     throw new Error(`Table non autorisée : ${tableName}`);
   }
@@ -638,8 +712,13 @@ export async function saveItem(tableName: string, item: any): Promise<boolean> {
     const updates: string[] = [];
 
     // Deal with serialization and object unwrapping
-    const rawData = item && item.data && typeof item.data === 'object' ? { ...item.data, id: item.id || item.data.id } : item;
+    const rawData = item && item.data && typeof item.data === 'object' && tableName !== 'specialized_pneumo' ? { ...item.data, id: item.id || item.data.id } : item;
     const preparedItem = { ...rawData };
+    if (tableName === 'specialized_pneumo') {
+      if (preparedItem.data && typeof preparedItem.data !== 'string') {
+        preparedItem.data = JSON.stringify(preparedItem.data);
+      }
+    }
     if (tableName === 'sales' && preparedItem.items && typeof preparedItem.items !== 'string') {
       preparedItem.items = JSON.stringify(preparedItem.items);
     }
@@ -674,6 +753,34 @@ export async function saveItem(tableName: string, item: any): Promise<boolean> {
       if (col === 'centerId' && (val === undefined || val === null || val === '')) {
         // Safe fallback to prevent ER_BAD_NULL_ERROR
         val = 'center-1';
+      } else if (tableName === 'services') {
+        if (col === 'emergencyPrice' || col === 'ipmPrice' || col === 'insurancePrice') {
+          val = (val !== undefined && val !== null && val !== '') 
+            ? Number(val) 
+            : (preparedItem.price !== undefined && preparedItem.price !== null && preparedItem.price !== '' ? Number(preparedItem.price) : 0);
+        } else if (col === 'price') {
+          val = (val !== undefined && val !== null && val !== '') ? Number(val) : 0;
+        } else if (col === 'durationMinutes') {
+          val = (val !== undefined && val !== null && val !== '') ? Number(val) : 15;
+        } else if (col === 'isActive') {
+          val = (val !== undefined && val !== null) ? (val ? 1 : 0) : 1;
+        } else if (val === undefined) {
+          val = null;
+        }
+      } else if (tableName === 'medicines') {
+        if (col === 'price' || col === 'stock' || col === 'minStock') {
+          val = (val !== undefined && val !== null && val !== '') ? Number(val) : 0;
+        } else if (val === undefined) {
+          val = null;
+        }
+      } else if (tableName === 'tickets') {
+        if (col === 'amount') {
+          val = (val !== undefined && val !== null && val !== '') ? Number(val) : 0;
+        } else if (col === 'patientAge') {
+          val = (val !== undefined && val !== null && val !== '') ? Number(val) : 0;
+        } else if (val === undefined) {
+          val = null;
+        }
       } else if ((col === 'ticketId' || col === 'patientId' || col === 'doctorId') && tableName === 'consultations' && (val === undefined || val === null)) {
         val = '';
       } else if (val === undefined) {
@@ -703,7 +810,7 @@ export async function deleteItem(tableName: string, id: string): Promise<boolean
   const activePool = await getMysqlPool();
   if (!activePool) return false;
 
-  const whitelist = ['centers', 'users', 'patients', 'tickets', 'services', 'medicines', 'sales', 'consultations', 'lab_results', 'appointments', 'beds', 'hospitalizations', 'mutuals', 'expenses', 'bank_transfers'];
+  const whitelist = ['centers', 'users', 'patients', 'tickets', 'services', 'medicines', 'sales', 'consultations', 'lab_results', 'appointments', 'beds', 'hospitalizations', 'mutuals', 'expenses', 'bank_transfers', 'specialized_pneumo'];
   if (!whitelist.includes(tableName)) {
     throw new Error(`Table non autorisée : ${tableName}`);
   }
@@ -748,7 +855,7 @@ export async function batchSaveItems(tableName: string, items: any[]): Promise<n
   const activePool = await getMysqlPool();
   if (!activePool || !items || items.length === 0) return 0;
 
-  const whitelist = ['centers', 'users', 'patients', 'tickets', 'services', 'medicines', 'sales', 'consultations', 'lab_results', 'appointments', 'beds', 'hospitalizations', 'mutuals', 'expenses', 'bank_transfers'];
+  const whitelist = ['centers', 'users', 'patients', 'tickets', 'services', 'medicines', 'sales', 'consultations', 'lab_results', 'appointments', 'beds', 'hospitalizations', 'mutuals', 'expenses', 'bank_transfers', 'specialized_pneumo'];
   if (!whitelist.includes(tableName)) {
     throw new Error(`Table non autorisée : ${tableName}`);
   }
@@ -775,7 +882,7 @@ export async function truncateTables(tableNames: string[]): Promise<boolean> {
   const activePool = await getMysqlPool();
   if (!activePool) return false;
 
-  const whitelist = ['centers', 'users', 'patients', 'tickets', 'services', 'medicines', 'sales', 'consultations', 'lab_results', 'appointments', 'beds', 'hospitalizations', 'mutuals', 'expenses', 'bank_transfers'];
+  const whitelist = ['centers', 'users', 'patients', 'tickets', 'services', 'medicines', 'sales', 'consultations', 'lab_results', 'appointments', 'beds', 'hospitalizations', 'mutuals', 'expenses', 'bank_transfers', 'specialized_pneumo'];
   const targets = tableNames.filter(name => whitelist.includes(name));
   if (targets.length === 0) return true;
 
