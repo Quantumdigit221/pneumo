@@ -697,9 +697,23 @@ export const SpecializedForms: React.FC = () => {
                             onClick={() => {
                               setPreviewModalRecord(rec);
                               setPreviewModalOpen(true);
+                              setTimeout(() => window.print(), 350);
+                            }}
+                            className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-3xs font-bold transition cursor-pointer"
+                            title="Imprimer directement au format A4"
+                          >
+                            <Printer className="w-3 h-3 text-teal-600" />
+                            <span>Imprimer</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPreviewModalRecord(rec);
+                              setPreviewModalOpen(true);
                             }}
                             className="p-1.5 text-slate-500 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition cursor-pointer"
-                            title="Consulter et Imprimer A4"
+                            title="Consulter les détails"
                           >
                             <Eye className="w-3.5 h-3.5" />
                           </button>

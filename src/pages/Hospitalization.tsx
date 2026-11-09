@@ -1526,14 +1526,19 @@ export function Hospitalization() {
               <div className="a4-document-sheet p-8 bg-white rounded-xl border border-slate-300 space-y-5 text-slate-800 font-sans shadow-xs">
                 {/* National Emblem & Hospital Header */}
                 <div className="avoid-page-break space-y-2 border-b-2 border-slate-900 pb-4">
-                  <div className="flex h-1.5 w-full rounded-full overflow-hidden">
-                    <div className="w-1/3 bg-[#00853F]" />
-                    <div className="w-1/3 bg-[#FDEF42]" />
-                    <div className="w-1/3 bg-[#E31B23]" />
+                <div className="flex h-2 w-full rounded-full overflow-hidden shadow-2xs">
+                  <div className="w-1/3 bg-[#00853F]" />
+                  <div className="w-1/3 bg-[#FDEF42] flex items-center justify-center">
+                    <span className="text-[#00853F] text-[9px] leading-none select-none font-bold">★</span>
                   </div>
+                  <div className="w-1/3 bg-[#E31B23]" />
+                </div>
                   <div className="text-center space-y-1">
                     <p className="text-[10px] font-black uppercase tracking-widest text-slate-700">
-                      RÉPUBLIQUE DU SÉNÉGAL • MINISTÈRE DE LA SANTÉ ET DE L'ACTION SOCIALE
+                      RÉPUBLIQUE DU SÉNÉGAL • Un Peuple - Un But - Une Foi
+                    </p>
+                    <p className="text-[9px] font-bold uppercase tracking-wider text-slate-600">
+                      MINISTÈRE DE LA SANTÉ ET DE L'ACTION SOCIALE
                     </p>
                     <h2 className="text-base font-black text-slate-950 uppercase tracking-tight">
                       CENTRE HOSPITALIER RÉGIONAL EL HADJI IBRAHIMA NIASS (CHREIN) — KAOLACK
@@ -1542,7 +1547,7 @@ export function Hospitalization() {
                       SERVICE DE PNEUMOLOGIE ET MALADIES INFECTIEUSES
                     </p>
                     <p className="text-3xs text-slate-500 font-medium">
-                      Route Nationale, Quartier Ndangane • Tél: +221 33 941 12 34 • Kaolack, Sénégal
+                      Route Nationale, Quartier Ndangane • B.P. 42 Kaolack • Tél: +221 33 941 12 34 • Kaolack, Sénégal
                     </p>
                   </div>
                 </div>
@@ -1557,20 +1562,32 @@ export function Hospitalization() {
                 </div>
 
                 {/* Patient & Stay Identity Card */}
-                <div className="avoid-page-break grid grid-cols-2 gap-4 p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs">
-                  <div className="space-y-1">
-                    <p><span className="text-slate-500 font-medium">Patient :</span> <strong className="text-slate-900">{selectedHospForDetail.patientName}</strong></p>
-                    <p><span className="text-slate-500 font-medium">Sexe / Âge :</span> <strong>{selectedHospForDetail.patientGender} • {selectedHospForDetail.patientAge} ans</strong></p>
-                    <p><span className="text-slate-500 font-medium">Unité / Lit :</span> <strong>{selectedHospForDetail.roomNumber}</strong></p>
-                    <p><span className="text-slate-500 font-medium">Dossier / IP :</span> <strong className="font-mono">{selectedHospForDetail.patientId.slice(-6).toUpperCase()}</strong></p>
-                  </div>
-                  <div className="space-y-1 text-right sm:text-left">
-                    <p><span className="text-slate-500 font-medium">Date d'admission :</span> <strong>{selectedHospForDetail.admissionDate}</strong></p>
-                    <p><span className="text-slate-500 font-medium">Date de sortie :</span> <strong>{selectedHospForDetail.actualDischargeDate || dischargeDate}</strong></p>
-                    <p><span className="text-slate-500 font-medium">Médecin référent :</span> <strong>{selectedHospForDetail.doctorName || currentUser?.name || 'Dr Cheikh Ndao'}</strong></p>
-                    <p><span className="text-slate-500 font-medium">Statut de sortie :</span> <strong className="text-emerald-700">Sortie autorisée par médecin</strong></p>
-                  </div>
-                </div>
+                {(() => {
+                  const hospPatient = patients.find(p => p.id === selectedHospForDetail.patientId);
+                  return (
+                    <div className="avoid-page-break grid grid-cols-2 gap-4 p-4 bg-slate-50 border border-slate-300 rounded-xl text-xs">
+                      <div className="space-y-1">
+                        <p><span className="text-slate-500 font-medium">Nom & Prénom :</span> <strong className="text-slate-950 font-bold uppercase">{selectedHospForDetail.patientName}</strong></p>
+                        <p><span className="text-slate-500 font-medium">Code IP :</span> <strong className="font-mono text-teal-800 font-bold">{hospPatient?.code || selectedHospForDetail.patientId.slice(-6).toUpperCase()}</strong> {hospPatient?.hospitalNumber && <span className="font-mono text-slate-500">({hospPatient.hospitalNumber})</span>}</p>
+                        <p><span className="text-slate-500 font-medium">Sexe / Âge :</span> <strong>{selectedHospForDetail.patientGender === 'M' ? 'Masculin' : 'Féminin'} • {selectedHospForDetail.patientAge} ans</strong></p>
+                        <p><span className="text-slate-500 font-medium">Domicile :</span> <span>{hospPatient?.district ? `${hospPatient.district}, Kaolack` : hospPatient?.address || 'Kaolack, Sénégal'}</span></p>
+                        <p><span className="text-slate-500 font-medium">Téléphone :</span> <span className="font-mono">{hospPatient?.phone || 'Non renseigné'}</span></p>
+                        {hospPatient?.bloodGroup && (
+                          <p><span className="text-slate-500 font-medium">Groupe Sanguin :</span> <strong className="font-mono text-rose-700">{hospPatient.bloodGroup}</strong></p>
+                        )}
+                        <p><span className="text-slate-500 font-medium">Unité & Lit :</span> <strong className="text-indigo-800 font-bold">{selectedHospForDetail.roomNumber}</strong></p>
+                      </div>
+                      <div className="space-y-1 text-right sm:text-left">
+                        <p><span className="text-slate-500 font-medium">Date d'admission :</span> <strong>{new Date(selectedHospForDetail.admissionDate).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}</strong></p>
+                        <p><span className="text-slate-500 font-medium">Date de sortie :</span> <strong>{new Date(selectedHospForDetail.actualDischargeDate || dischargeDate).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}</strong></p>
+                        <p><span className="text-slate-500 font-medium">Médecin chef / Référent :</span> <strong>{selectedHospForDetail.doctorName || currentUser?.name || 'Dr. Cheikh Ndao'}</strong></p>
+                        <p><span className="text-slate-500 font-medium">N° Inscription Ordre (CNOM) :</span> <span className="font-mono text-slate-700">SN-1428</span></p>
+                        <p><span className="text-slate-500 font-medium">Service :</span> <strong>Pneumologie & Maladies Infectieuses</strong></p>
+                        <p><span className="text-slate-500 font-medium">Statut du séjour :</span> <strong className="text-emerald-700 font-bold">Sortie autorisée par avis médical</strong></p>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Diagnostic Section */}
                 <div className="avoid-page-break space-y-1">
@@ -1628,13 +1645,22 @@ export function Hospitalization() {
 
                   <div className="text-right space-y-1 min-w-[200px]">
                     <p className="text-xs font-bold text-slate-900">Le Médecin Chef / Référent</p>
-                    <p className="text-xs text-teal-700 font-extrabold">{selectedHospForDetail.doctorName || currentUser?.name || 'Dr Cheikh Ndao'}</p>
-                    <div className="w-40 h-16 border-2 border-dashed border-teal-300 bg-teal-50/40 rounded-xl mt-1 flex flex-col items-center justify-center text-[9px] text-teal-800 font-semibold p-1">
-                      <span>Cachet Officiel CHREIN</span>
-                      <span className="text-[8px] text-teal-600">Service de Pneumologie</span>
-                      <span className="text-[8px] text-slate-500">Signé électroniquement ✓</span>
+                    <p className="text-xs text-teal-700 font-extrabold">{selectedHospForDetail.doctorName || currentUser?.name || 'Dr. Cheikh Ndao'}</p>
+                    <div className="inline-block w-44 h-18 border-2 border-dashed border-teal-300 bg-teal-50/40 rounded-xl p-1.5 text-center text-[9px] text-teal-800 font-semibold">
+                      <span className="block font-bold">Cachet Officiel CHREIN</span>
+                      <span className="block text-teal-600">Service de Pneumologie</span>
+                      <span className="block text-slate-500 text-[8px] mt-0.5">Signé électroniquement ✓</span>
                     </div>
                   </div>
+                </div>
+
+                {/* Legal Notice Footer */}
+                <div className="avoid-page-break pt-3 text-center border-t border-slate-200 text-[8px] text-slate-500 leading-normal">
+                  <p>
+                    Document médical officiel généré par le Système d'Information Hospitalier (DPI) du Service de Pneumologie — CHREIN Kaolack.
+                    Soumis au secret médical professionnel (Article 378 du Code Pénal Sénégalais et Article 12 du Code de Déontologie Médicale).
+                    Toute falsification, altération ou usage frauduleux de ce document expose aux sanctions prévues par la législation en vigueur.
+                  </p>
                 </div>
               </div>
 

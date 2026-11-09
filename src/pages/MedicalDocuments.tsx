@@ -657,9 +657,21 @@ export const MedicalDocuments: React.FC = () => {
                   <div className="flex items-center gap-1">
                     <button
                       type="button"
+                      onClick={() => {
+                        setActivePreviewDoc(doc);
+                        setTimeout(() => window.print(), 350);
+                      }}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xxs font-bold transition cursor-pointer"
+                      title="Imprimer directement au format A4"
+                    >
+                      <Printer className="w-3.5 h-3.5 text-teal-600" />
+                      <span className="hidden sm:inline">Imprimer A4</span>
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setActivePreviewDoc(doc)}
                       className="p-1.5 bg-teal-50 hover:bg-teal-100 text-teal-700 rounded-lg text-xs font-bold transition cursor-pointer"
-                      title="Visualiser et Imprimer"
+                      title="Aperçu officiel CHREIN"
                     >
                       <Eye className="w-4 h-4" />
                     </button>
@@ -728,14 +740,19 @@ export const MedicalDocuments: React.FC = () => {
             <div className="a4-document-sheet p-8 bg-white border border-slate-300 rounded-xl space-y-5 text-slate-900 font-sans shadow-xs">
               {/* National Emblem & Hospital Header Bar */}
               <div className="avoid-page-break space-y-2 border-b-2 border-slate-900 pb-4">
-                <div className="flex h-1.5 w-full rounded-full overflow-hidden">
+                <div className="flex h-2 w-full rounded-full overflow-hidden shadow-2xs">
                   <div className="w-1/3 bg-[#00853F]" />
-                  <div className="w-1/3 bg-[#FDEF42]" />
+                  <div className="w-1/3 bg-[#FDEF42] flex items-center justify-center">
+                    <span className="text-[#00853F] text-[9px] leading-none select-none font-bold">★</span>
+                  </div>
                   <div className="w-1/3 bg-[#E31B23]" />
                 </div>
                 <div className="text-center space-y-1">
                   <p className="text-[10px] font-black uppercase tracking-widest text-slate-700">
-                    RÉPUBLIQUE DU SÉNÉGAL • MINISTÈRE DE LA SANTÉ ET DE L'ACTION SOCIALE
+                    RÉPUBLIQUE DU SÉNÉGAL • Un Peuple - Un But - Une Foi
+                  </p>
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-slate-600">
+                    MINISTÈRE DE LA SANTÉ ET DE L'ACTION SOCIALE
                   </p>
                   <h2 className="text-base font-black text-slate-950 uppercase tracking-tight">
                     CENTRE HOSPITALIER RÉGIONAL EL HADJI IBRAHIMA NIASS (CHREIN) — KAOLACK
@@ -744,7 +761,7 @@ export const MedicalDocuments: React.FC = () => {
                     SERVICE DE PNEUMOLOGIE ET MALADIES INFECTIEUSES
                   </p>
                   <p className="text-3xs text-slate-500 font-medium">
-                    Route Nationale, Quartier Ndangane • Tél: +221 33 941 12 34 • Kaolack, Sénégal
+                    Route Nationale, Quartier Ndangane • B.P. 42 Kaolack • Tél: +221 33 941 12 34 • Kaolack, Sénégal
                   </p>
                 </div>
               </div>
@@ -760,22 +777,37 @@ export const MedicalDocuments: React.FC = () => {
               </div>
 
               {/* Patient Demographics Box */}
-              <div className="avoid-page-break grid grid-cols-2 gap-4 p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs">
-                <div className="space-y-1">
-                  <p><span className="text-slate-500 font-medium">Nom & Prénom :</span> <strong className="text-slate-900">{activePreviewDoc.patientName}</strong></p>
-                  <p><span className="text-slate-500 font-medium">N° Hospitalier / IP :</span> <strong className="font-mono">{activePreviewDoc.patientHospitalNumber}</strong></p>
-                  <p><span className="text-slate-500 font-medium">Âge / Sexe :</span> <strong>{activePreviewDoc.patientAge} ans ({activePreviewDoc.patientGender})</strong></p>
-                  <p><span className="text-slate-500 font-medium">Adresse :</span> <span>{activePreviewDoc.patientAddress || 'Kaolack'}</span></p>
-                </div>
-                <div className="space-y-1 text-right sm:text-left">
-                  <p><span className="text-slate-500 font-medium">Date d'émission :</span> <strong>{new Date(activePreviewDoc.createdAt).toLocaleDateString('fr-FR')}</strong></p>
-                  <p><span className="text-slate-500 font-medium">Praticien :</span> <strong>{activePreviewDoc.signedByName || activePreviewDoc.createdByName}</strong></p>
-                  <p><span className="text-slate-500 font-medium">Spécialité :</span> <strong>Pneumologie & Infectiologie</strong></p>
-                  {activePreviewDoc.metadata?.costFcfa && (
-                    <p><span className="text-slate-500 font-medium">Montant estimé :</span> <strong className="text-teal-700 font-mono">{activePreviewDoc.metadata.costFcfa.toLocaleString()} FCFA</strong></p>
-                  )}
-                </div>
-              </div>
+              {(() => {
+                const docPatient = patients.find(p => p.id === activePreviewDoc.patientId || p.code === activePreviewDoc.patientHospitalNumber);
+                return (
+                  <div className="avoid-page-break grid grid-cols-2 gap-4 p-4 bg-slate-50 border border-slate-300 rounded-xl text-xs">
+                    <div className="space-y-1">
+                      <p><span className="text-slate-500 font-medium">Nom & Prénom :</span> <strong className="text-slate-950 font-bold uppercase">{docPatient ? `${docPatient.lastName} ${docPatient.firstName}` : activePreviewDoc.patientName}</strong></p>
+                      <p><span className="text-slate-500 font-medium">N° Hospitalier / IP :</span> <strong className="font-mono text-teal-800 font-bold">{docPatient?.code || activePreviewDoc.patientHospitalNumber}</strong> {docPatient?.hospitalNumber && <span className="font-mono text-slate-500">({docPatient.hospitalNumber})</span>}</p>
+                      <p><span className="text-slate-500 font-medium">Date Naiss. / Âge :</span> <strong>{docPatient?.birthDate ? `${new Date(docPatient.birthDate).toLocaleDateString('fr-FR')} (${activePreviewDoc.patientAge} ans)` : `${activePreviewDoc.patientAge} ans`} ({activePreviewDoc.patientGender === 'M' ? 'Masculin' : 'Féminin'})</strong></p>
+                      <p><span className="text-slate-500 font-medium">Domicile :</span> <span>{docPatient?.district ? `${docPatient.district}, Kaolack` : activePreviewDoc.patientAddress || 'Kaolack, Sénégal'}</span></p>
+                      <p><span className="text-slate-500 font-medium">Téléphone :</span> <span className="font-mono">{docPatient?.phone || 'Non renseigné'}</span></p>
+                      {docPatient?.bloodGroup && (
+                        <p><span className="text-slate-500 font-medium">Groupe Sanguin :</span> <strong className="font-mono text-rose-700">{docPatient.bloodGroup}</strong></p>
+                      )}
+                      {docPatient?.allergies && (
+                        <p><span className="text-slate-500 font-medium">Allergies connues :</span> <strong className="text-amber-800">{docPatient.allergies}</strong></p>
+                      )}
+                    </div>
+                    <div className="space-y-1 text-right sm:text-left">
+                      <p><span className="text-slate-500 font-medium">Date d'émission :</span> <strong>{new Date(activePreviewDoc.createdAt).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}</strong></p>
+                      <p><span className="text-slate-500 font-medium">Praticien :</span> <strong>{activePreviewDoc.signedByName || activePreviewDoc.createdByName}</strong></p>
+                      <p><span className="text-slate-500 font-medium">Titre :</span> <span>Médecin Spécialiste Pneumologue</span></p>
+                      <p><span className="text-slate-500 font-medium">N° Inscription Ordre (CNOM) :</span> <span className="font-mono text-slate-700">SN-1428</span></p>
+                      <p><span className="text-slate-500 font-medium">Spécialité :</span> <strong>Pneumologie & Maladies Infectieuses</strong></p>
+                      <p><span className="text-slate-500 font-medium">Structure :</span> <span>CHREIN Kaolack</span></p>
+                      {activePreviewDoc.metadata?.costFcfa && (
+                        <p><span className="text-slate-500 font-medium">Montant estimé :</span> <strong className="text-teal-700 font-mono">{activePreviewDoc.metadata.costFcfa.toLocaleString()} FCFA</strong></p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Diagnostics CIM-11 if any */}
               {activePreviewDoc.metadata?.diagnosesCim11 && activePreviewDoc.metadata.diagnosesCim11.length > 0 && (
@@ -825,12 +857,21 @@ export const MedicalDocuments: React.FC = () => {
                 <div className="text-right space-y-1 min-w-[200px]">
                   <p className="text-xs font-bold text-slate-900">Le Médecin Spécialiste Traitant</p>
                   <p className="text-xs text-teal-700 font-extrabold">{activePreviewDoc.signedByName || activePreviewDoc.createdByName}</p>
-                  <div className="w-40 h-16 border-2 border-dashed border-teal-300 bg-teal-50/40 rounded-xl mt-1 flex flex-col items-center justify-center text-[9px] text-teal-800 font-semibold p-1">
-                    <span>Cachet Officiel CHREIN</span>
-                    <span className="text-[8px] text-teal-600">Pneumologie & Infectiologie</span>
-                    <span className="text-[8px] text-slate-500">Signé électroniquement ✓</span>
+                  <div className="inline-block w-44 h-18 border-2 border-dashed border-teal-300 bg-teal-50/40 rounded-xl p-1.5 text-center text-[9px] text-teal-800 font-semibold">
+                    <span className="block font-bold">Cachet Officiel CHREIN</span>
+                    <span className="block text-teal-600">Pneumologie & Infectiologie</span>
+                    <span className="block text-slate-500 text-[8px] mt-0.5">Signé électroniquement ✓</span>
                   </div>
                 </div>
+              </div>
+
+              {/* Legal Notice Footer */}
+              <div className="avoid-page-break pt-3 text-center border-t border-slate-200 text-[8px] text-slate-500 leading-normal">
+                <p>
+                  Document médical officiel généré par le Système d'Information Hospitalier (DPI) du Service de Pneumologie — CHREIN Kaolack.
+                  Soumis au secret médical professionnel (Article 378 du Code Pénal Sénégalais et Article 12 du Code de Déontologie Médicale).
+                  Toute falsification, altération ou usage frauduleux de ce document expose aux sanctions prévues par la législation en vigueur.
+                </p>
               </div>
             </div>
 

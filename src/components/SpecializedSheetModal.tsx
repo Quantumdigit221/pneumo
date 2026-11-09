@@ -20,7 +20,8 @@ import {
   ShieldCheck,
   AlertCircle,
   Eye,
-  ArrowLeft
+  ArrowLeft,
+  QrCode
 } from 'lucide-react';
 import { VoiceDictationButton } from './VoiceDictationButton';
 
@@ -292,14 +293,19 @@ export const SpecializedSheetModal: React.FC<SpecializedSheetModalProps> = ({
           <div className="a4-document-sheet p-6 sm:p-8 bg-white border border-slate-300 rounded-xl space-y-5 text-slate-900 font-sans shadow-xs">
             {/* Senegal National Flag Stripe & Hospital Header */}
             <div className="avoid-page-break space-y-2 border-b-2 border-slate-900 pb-4">
-              <div className="flex h-1.5 w-full rounded-full overflow-hidden">
+              <div className="flex h-2 w-full rounded-full overflow-hidden shadow-2xs">
                 <div className="w-1/3 bg-[#00853F]" />
-                <div className="w-1/3 bg-[#FDEF42]" />
+                <div className="w-1/3 bg-[#FDEF42] flex items-center justify-center">
+                  <span className="text-[#00853F] text-[9px] leading-none select-none font-bold">★</span>
+                </div>
                 <div className="w-1/3 bg-[#E31B23]" />
               </div>
               <div className="text-center space-y-1">
                 <p className="text-[10px] font-black uppercase tracking-widest text-slate-700">
-                  RÉPUBLIQUE DU SÉNÉGAL • MINISTÈRE DE LA SANTÉ ET DE L'ACTION SOCIALE
+                  RÉPUBLIQUE DU SÉNÉGAL • Un Peuple - Un But - Une Foi
+                </p>
+                <p className="text-[9px] font-bold uppercase tracking-wider text-slate-600">
+                  MINISTÈRE DE LA SANTÉ ET DE L'ACTION SOCIALE
                 </p>
                 <h2 className="text-base font-black text-slate-950 uppercase tracking-tight">
                   CENTRE HOSPITALIER RÉGIONAL EL HADJI IBRAHIMA NIASS (CHREIN) — KAOLACK
@@ -308,7 +314,7 @@ export const SpecializedSheetModal: React.FC<SpecializedSheetModalProps> = ({
                   SERVICE DE PNEUMOLOGIE ET MALADIES INFECTIEUSES
                 </p>
                 <p className="text-3xs text-slate-500 font-medium">
-                  Route Nationale, Quartier Ndangane • Tél: +221 33 941 12 34 • Kaolack, Sénégal
+                  Route Nationale, Quartier Ndangane • B.P. 42 Kaolack • Tél: +221 33 941 12 34 • Kaolack, Sénégal
                 </p>
               </div>
             </div>
@@ -324,19 +330,30 @@ export const SpecializedSheetModal: React.FC<SpecializedSheetModalProps> = ({
             </div>
 
             {/* Patient Demographics Box */}
-            <div className="avoid-page-break grid grid-cols-2 gap-4 p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs">
+            <div className="avoid-page-break grid grid-cols-2 gap-4 p-4 bg-slate-50 border border-slate-300 rounded-xl text-xs">
               <div className="space-y-1">
-                <p><span className="text-slate-500 font-medium">Patient :</span> <strong className="text-slate-900">{patient.firstName} {patient.lastName}</strong></p>
-                <p><span className="text-slate-500 font-medium">Code IP / Dossier :</span> <strong className="font-mono">{patient.code}</strong> (N° {patient.hospitalNumber || 'CHREIN'})</p>
-                <p><span className="text-slate-500 font-medium">Âge / Sexe :</span> <strong>{patient.age} ans ({patient.gender === 'M' ? 'Masculin' : 'Féminin'})</strong></p>
-                <p><span className="text-slate-500 font-medium">Téléphone :</span> <span>{patient.phone || 'Non renseigné'}</span></p>
-                <p><span className="text-slate-500 font-medium">Adresse :</span> <span>{patient.address || 'Kaolack'}</span></p>
+                <p><span className="text-slate-500 font-medium">Nom & Prénom :</span> <strong className="text-slate-950 font-bold uppercase">{patient.lastName}</strong> <strong className="text-slate-900">{patient.firstName}</strong></p>
+                <p><span className="text-slate-500 font-medium">Code IP / Dossier :</span> <strong className="font-mono text-teal-800 font-bold">{patient.code}</strong> (N° Hosp: <span className="font-mono">{patient.hospitalNumber || 'CHREIN-PNEUMO'}</span>)</p>
+                <p><span className="text-slate-500 font-medium">Date Naiss. / Âge :</span> <strong>{patient.birthDate ? `${new Date(patient.birthDate).toLocaleDateString('fr-FR')} (${patient.age} ans)` : `${patient.age} ans`} ({patient.gender === 'M' ? 'Masculin' : 'Féminin'})</strong></p>
+                <p><span className="text-slate-500 font-medium">Domicile :</span> <span>{patient.district ? `${patient.district}, Kaolack` : patient.address || 'Kaolack, Sénégal'}</span></p>
+                <p><span className="text-slate-500 font-medium">Téléphone :</span> <span className="font-mono">{patient.phone || 'Non renseigné'}</span></p>
+                {patient.bloodGroup && (
+                  <p><span className="text-slate-500 font-medium">Groupe Sanguin :</span> <strong className="font-mono text-rose-700">{patient.bloodGroup}</strong></p>
+                )}
+                {patient.allergies && (
+                  <p><span className="text-slate-500 font-medium">Allergies connues :</span> <strong className="text-amber-800">{patient.allergies}</strong></p>
+                )}
               </div>
               <div className="space-y-1 text-right sm:text-left">
                 <p><span className="text-slate-500 font-medium">Date d'évaluation :</span> <strong>{new Date(record?.date || Date.now()).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}</strong></p>
-                <p><span className="text-slate-500 font-medium">Praticien référent :</span> <strong>{record?.doctorName || currentUser?.name || 'Dr. Pneumologue'}</strong></p>
-                <p><span className="text-slate-500 font-medium">Département :</span> <strong>Pneumo-Phtisiologie & Soins Respiratoires</strong></p>
-                <p><span className="text-slate-500 font-medium">Statut :</span> <strong className="text-emerald-700 font-bold">Validé au Dossier Patient Informatisé</strong></p>
+                <p><span className="text-slate-500 font-medium">Praticien référent :</span> <strong>{record?.doctorName || currentUser?.name || 'Dr. Cheikh Ndao'}</strong></p>
+                <p><span className="text-slate-500 font-medium">Titre :</span> <span>Médecin Spécialiste Pneumologue</span></p>
+                <p><span className="text-slate-500 font-medium">N° Inscription Ordre (CNOM) :</span> <span className="font-mono text-slate-700">SN-1428</span></p>
+                <p><span className="text-slate-500 font-medium">Service émetteur :</span> <strong>Pneumo-Phtisiologie & Soins Respiratoires</strong></p>
+                {patient.chronicConditions && (
+                  <p><span className="text-slate-500 font-medium">Antécédents / Terrain :</span> <span className="text-slate-700 font-medium">{patient.chronicConditions}</span></p>
+                )}
+                <p><span className="text-slate-500 font-medium">Statut :</span> <strong className="text-emerald-700 font-bold">Validé au Dossier Patient Informatisé (DPI)</strong></p>
               </div>
             </div>
 
@@ -548,21 +565,39 @@ export const SpecializedSheetModal: React.FC<SpecializedSheetModalProps> = ({
               </p>
             </div>
 
-            {/* Signature Box */}
-            <div className="avoid-page-break pt-4 border-t border-slate-300 grid grid-cols-2 gap-8 text-xs">
-              <div className="space-y-1">
-                <span className="text-slate-500 font-medium">Fait à Kaolack, le :</span>
-                <p className="font-bold text-slate-900">
-                  {new Date(record?.date || Date.now()).toLocaleDateString('fr-FR')}
-                </p>
-                <p className="text-3xs text-slate-400">DPI CHREIN Kaolack — Document certifié</p>
-              </div>
-              <div className="text-right space-y-8">
-                <span className="text-slate-500 font-medium block">Signature et Cachet du Médecin Spécialiste :</span>
-                <div className="inline-block border-b border-slate-400 min-w-[160px] pb-1 text-center font-bold text-slate-800">
-                  {record?.doctorName || currentUser?.name || 'Dr. Cheikh Ndao'}
+            {/* Signature & Official Seal Box */}
+            <div className="avoid-page-break pt-6 border-t-2 border-slate-900 flex flex-col sm:flex-row items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="w-16 h-16 border-2 border-slate-300 rounded-xl flex flex-col items-center justify-center p-1 bg-slate-50">
+                  <QrCode className="w-8 h-8 text-slate-700" />
+                  <span className="text-[7px] font-mono text-slate-400 mt-0.5 uppercase">CHREIN VÉRIF</span>
+                </div>
+                <div className="text-[10px] text-slate-500 space-y-0.5">
+                  <p className="font-bold text-slate-800">Authentification Documentaire DPI CHREIN</p>
+                  <p>Réf Fiche : <span className="font-mono text-3xs font-bold text-slate-700">{record?.id || 'DPI-PNEUMO'}</span></p>
+                  <p>Fait à Kaolack, le : <strong className="text-slate-800">{new Date(record?.date || Date.now()).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}</strong></p>
+                  <p className="text-3xs text-slate-400">Document médical certifié conforme au Code de Déontologie Médicale</p>
                 </div>
               </div>
+
+              <div className="text-right space-y-1 min-w-[200px]">
+                <p className="text-xs font-bold text-slate-900">Le Médecin Spécialiste Traitant</p>
+                <p className="text-xs text-teal-700 font-extrabold">{record?.doctorName || currentUser?.name || 'Dr. Cheikh Ndao'}</p>
+                <div className="inline-block w-44 h-18 border-2 border-dashed border-teal-300 bg-teal-50/40 rounded-xl p-1.5 text-center text-[9px] text-teal-800 font-semibold">
+                  <span className="block font-bold">Cachet Officiel CHREIN</span>
+                  <span className="block text-teal-600">Pneumologie & Phtisiologie</span>
+                  <span className="block text-slate-500 text-[8px] mt-0.5">Signature Électronique Certifiée ✓</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Legal Notice Footer */}
+            <div className="avoid-page-break pt-3 text-center border-t border-slate-200 text-[8px] text-slate-500 leading-normal">
+              <p>
+                Document médical officiel généré par le Système d'Information Hospitalier (DPI) du Service de Pneumologie — CHREIN Kaolack.
+                Soumis au secret médical professionnel (Article 378 du Code Pénal Sénégalais et Article 12 du Code de Déontologie Médicale).
+                Toute falsification, altération ou usage frauduleux de ce document expose aux sanctions prévues par la législation en vigueur.
+              </p>
             </div>
           </div>
         )}

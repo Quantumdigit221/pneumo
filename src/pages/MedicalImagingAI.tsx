@@ -1843,7 +1843,10 @@ export const MedicalImagingAI: React.FC = () => {
                 </div>
                 <div className="text-center space-y-1">
                   <p className="text-[10px] font-black uppercase tracking-widest text-slate-700">
-                    RÉPUBLIQUE DU SÉNÉGAL • MINISTÈRE DE LA SANTÉ ET DE L'ACTION SOCIALE
+                    RÉPUBLIQUE DU SÉNÉGAL • Un Peuple - Un But - Une Foi
+                  </p>
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-slate-600">
+                    MINISTÈRE DE LA SANTÉ ET DE L'ACTION SOCIALE
                   </p>
                   <h2 className="text-base font-black text-slate-950 uppercase tracking-tight">
                     CENTRE HOSPITALIER RÉGIONAL EL HADJI IBRAHIMA NIASS (CHREIN) — KAOLACK
@@ -1852,7 +1855,7 @@ export const MedicalImagingAI: React.FC = () => {
                     UNITÉ D'IMAGERIE THORACIQUE & SERVICE DE PNEUMOLOGIE
                   </p>
                   <p className="text-3xs text-slate-500 font-medium">
-                    Plateau Technique Numérique • Route Nationale, Quartier Ndangane • Kaolack, Sénégal
+                    Plateau Technique Numérique • Route Nationale, Quartier Ndangane • B.P. 42 Kaolack, Sénégal
                   </p>
                 </div>
               </div>

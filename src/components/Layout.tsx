@@ -171,7 +171,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
   const getPageTitle = (pathname: string): { title: string; category: string } => {
     switch (pathname) {
       case '/':
-        return { title: 'Tableau de Bord Clinique', category: 'Supervision' };
+        return { title: 'Tableau de Bord', category: 'Supervision' };
       case '/patients':
         return { title: 'Dossiers Patients & IP', category: 'Prise en charge' };
       case '/consultations':
@@ -597,26 +597,6 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
 
           {/* Right: Hospital, User Info & Keyboard Shortcut */}
           <div className="flex items-center gap-3 shrink-0">
-            {/* Hostinger Database Status & Config Button */}
-            <button
-              type="button"
-              onClick={() => {
-                setIsHostingerModalOpen(true);
-                checkHostingerStatus().then((res: any) => setTestResult(res)).catch(() => null);
-              }}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xxs font-bold transition cursor-pointer shadow-2xs ${
-                hostingerStatus?.connected
-                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
-                  : 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100'
-              }`}
-              title="Base de données Hostinger : Statut & Diagnostic de connexion"
-            >
-              <Database className={`w-3.5 h-3.5 ${hostingerStatus?.connected ? 'text-emerald-600' : 'text-amber-600'}`} />
-              <span className="hidden sm:inline">
-                {hostingerStatus?.connected ? 'BD Hostinger : Active' : 'BD Hostinger : Config'}
-              </span>
-              <span className={`w-1.5 h-1.5 rounded-full ${hostingerStatus?.connected ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
-            </button>
 
             {/* Active Service Badge */}
             <div className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 bg-teal-50 text-teal-800 border border-teal-200 rounded-lg text-xxs font-bold">

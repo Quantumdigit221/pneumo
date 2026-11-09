@@ -11,10 +11,15 @@
   /* 1. Official A4 Page Setup */
   @page {
     size: A4 portrait;
-    margin: 12mm 12mm 12mm 12mm;
+    margin: 8mm 12mm 10mm 12mm;
   }
 
   /* 2. Global Document Reset for Crisp High-Contrast Output */
+  *, *::before, *::after {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
   html, body {
     width: 100% !important;
     min-width: 100% !important;
@@ -23,23 +28,41 @@
     margin: 0 !important;
     padding: 0 !important;
     background: #ffffff !important;
-    color: #0f172a !important;
+    color: #090d16 !important;
     overflow: visible !important;
-    font-size: 10pt !important;
+    font-size: 8.8pt !important;
+    line-height: 1.38 !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
+    color-adjust: exact !important;
   }
 
   /* 3. Hide all non-printable chrome: sidebars, navigation, headers, toolbars, voice assistants, modals backdrop */
   nav, aside, header, footer, .no-print, [role="tooltip"],
-  button:not(.print-include), .clinical-voice-widget, .toast, .portal-notification {
+  button:not(.print-include), input, select, textarea,
+  .clinical-voice-widget, .toast, .portal-notification, [data-floating-assistant] {
     display: none !important;
   }
 
-  /* When an active print modal is displayed, hide the underlying page background */
-  body:has(.print-modal-active) #root > *:not(.print-modal-active),
-  body:has(.print-modal-active) main > *:not(.print-modal-active),
+  /* When an active print modal is displayed, isolate the print modal and hide all background pages */
+  body:has(.print-modal-active) #root > div > aside,
+  body:has(.print-modal-active) #root > div > div > header,
+  body:has(.print-modal-active) #root > div > div > main > div > *:not(:has(.print-modal-active)):not(.print-modal-active) {
+    display: none !important;
+  }
+
+  body:has(.print-modal-active) *:has(> .print-modal-overlay) > *:not(.print-modal-overlay) {
+    display: none !important;
+  }
+
+  body:has(.print-modal-active) *:has(> * > .print-modal-overlay) > *:not(:has(.print-modal-overlay)) {
+    display: none !important;
+  }
+
   body:has(.print-modal-active) main {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100% !important;
     background: transparent !important;
   }
 
@@ -86,8 +109,8 @@
     color: #090d16 !important;
     border: none !important;
     box-shadow: none !important;
-    font-size: 9.5pt !important;
-    line-height: 1.45 !important;
+    font-size: 8.8pt !important;
+    line-height: 1.38 !important;
     display: block !important;
   }
 
@@ -112,13 +135,47 @@
     page-break-inside: avoid !important;
   }
 
-  /* High-contrast crisp borders on paper */
+  /* High-contrast crisp borders and typography on physical paper */
   .print-border {
     border-color: #94a3b8 !important;
   }
 
   .print-bg-subtle {
     background-color: #f8fafc !important;
+  }
+
+  strong, b, h1, h2, h3, h4 {
+    color: #000000 !important;
+  }
+
+  /* Senegal National Emblem Colors Exact Reproduction */
+  .bg-\[\#00853F\], [class*="bg-[#00853F]"] {
+    background-color: #00853F !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .bg-\[\#FDEF42\], [class*="bg-[#FDEF42]"] {
+    background-color: #FDEF42 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .bg-\[\#E31B23\], [class*="bg-[#E31B23]"] {
+    background-color: #E31B23 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Stamps and badges preservation */
+  .border-teal-200, .border-teal-300, .border-slate-300, .border-slate-200 {
+    border-color: #94a3b8 !important;
+  }
+
+  .bg-teal-50, .bg-slate-50 {
+    background-color: #f8fafc !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
 }
 
