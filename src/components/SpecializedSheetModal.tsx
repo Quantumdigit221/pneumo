@@ -290,10 +290,10 @@ export const SpecializedSheetModal: React.FC<SpecializedSheetModalProps> = ({
         {/* MODE 1: VIEW (CONSULTATION) & PRINT (A4 DOCUMENT)                        */}
         {/* ========================================================================= */}
         {(mode === 'view' || mode === 'print') && (
-          <div className="a4-document-sheet p-6 sm:p-8 bg-white border border-slate-300 rounded-xl space-y-5 text-slate-900 font-sans shadow-xs">
+          <div className="a4-document-sheet p-6 sm:p-8 bg-white border-2 border-slate-800 rounded-xl space-y-5 text-slate-900 font-sans shadow-sm">
             {/* Senegal National Flag Stripe & Hospital Header */}
             <div className="avoid-page-break space-y-2 border-b-2 border-slate-900 pb-4">
-              <div className="flex h-2 w-full rounded-full overflow-hidden shadow-2xs">
+              <div className="flex h-2.5 w-full rounded-md border border-slate-300 overflow-hidden shadow-2xs">
                 <div className="w-1/3 bg-[#00853F]" />
                 <div className="w-1/3 bg-[#FDEF42] flex items-center justify-center">
                   <span className="text-[#00853F] text-[9px] leading-none select-none font-bold">★</span>
@@ -320,17 +320,17 @@ export const SpecializedSheetModal: React.FC<SpecializedSheetModalProps> = ({
             </div>
 
             {/* Document Title Banner */}
-            <div className="avoid-page-break py-2.5 px-4 text-center bg-teal-50 border border-teal-200 rounded-xl">
-              <span className="font-black text-sm text-teal-950 uppercase tracking-widest block">
+            <div className="avoid-page-break py-2.5 px-4 text-center bg-slate-50 border-2 border-slate-900 rounded-lg shadow-2xs">
+              <span className="font-black text-sm text-slate-950 uppercase tracking-widest block">
                 {record?.title || activeConfig.label}
               </span>
-              <span className="text-xxs font-mono font-bold text-teal-800">
+              <span className="text-xxs font-mono font-bold text-slate-600">
                 DOSSIER MÉDICAL SPÉCIALISÉ • {activeConfig.badge} • RÉF : {record?.id || 'NOUVEAU'}
               </span>
             </div>
 
             {/* Patient Demographics Box */}
-            <div className="avoid-page-break grid grid-cols-2 gap-4 p-4 bg-slate-50 border border-slate-300 rounded-xl text-xs">
+            <div className="avoid-page-break grid grid-cols-2 gap-4 p-4 bg-slate-50/70 border border-slate-400 rounded-lg text-xs">
               <div className="space-y-1">
                 <p><span className="text-slate-500 font-medium">Nom & Prénom :</span> <strong className="text-slate-950 font-bold uppercase">{patient.lastName}</strong> <strong className="text-slate-900">{patient.firstName}</strong></p>
                 <p><span className="text-slate-500 font-medium">Code IP / Dossier :</span> <strong className="font-mono text-teal-800 font-bold">{patient.code}</strong> (N° Hosp: <span className="font-mono">{patient.hospitalNumber || 'CHREIN-PNEUMO'}</span>)</p>
@@ -565,28 +565,35 @@ export const SpecializedSheetModal: React.FC<SpecializedSheetModalProps> = ({
               </p>
             </div>
 
-            {/* Signature & Official Seal Box */}
-            <div className="avoid-page-break pt-6 border-t-2 border-slate-900 flex flex-col sm:flex-row items-center justify-between gap-4">
+            {/* Signature & Official Validation Area */}
+            <div className="avoid-page-break pt-5 border-t-2 border-slate-900 flex flex-col sm:flex-row items-end justify-between gap-4">
               <div className="flex items-center gap-3">
-                <div className="w-16 h-16 border-2 border-slate-300 rounded-xl flex flex-col items-center justify-center p-1 bg-slate-50">
+                <div className="w-16 h-16 border border-slate-300 rounded-lg flex flex-col items-center justify-center p-1 bg-slate-50">
                   <QrCode className="w-8 h-8 text-slate-700" />
                   <span className="text-[7px] font-mono text-slate-400 mt-0.5 uppercase">CHREIN VÉRIF</span>
                 </div>
                 <div className="text-[10px] text-slate-500 space-y-0.5">
                   <p className="font-bold text-slate-800">Authentification Documentaire DPI CHREIN</p>
                   <p>Réf Fiche : <span className="font-mono text-3xs font-bold text-slate-700">{record?.id || 'DPI-PNEUMO'}</span></p>
-                  <p>Fait à Kaolack, le : <strong className="text-slate-800">{new Date(record?.date || Date.now()).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}</strong></p>
-                  <p className="text-3xs text-slate-400">Document médical certifié conforme au Code de Déontologie Médicale</p>
+                  <p>Date d'émission : <strong className="text-slate-800">{new Date(record?.date || Date.now()).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}</strong></p>
+                  <p className="text-3xs text-slate-400">Dossier Patient Informatisé — Hôpital Régional de Kaolack</p>
                 </div>
               </div>
 
-              <div className="text-right space-y-1 min-w-[200px]">
-                <p className="text-xs font-bold text-slate-900">Le Médecin Spécialiste Traitant</p>
-                <p className="text-xs text-teal-700 font-extrabold">{record?.doctorName || currentUser?.name || 'Dr. Cheikh Ndao'}</p>
-                <div className="inline-block w-44 h-18 border-2 border-dashed border-teal-300 bg-teal-50/40 rounded-xl p-1.5 text-center text-[9px] text-teal-800 font-semibold">
-                  <span className="block font-bold">Cachet Officiel CHREIN</span>
-                  <span className="block text-teal-600">Pneumologie & Phtisiologie</span>
-                  <span className="block text-slate-500 text-[8px] mt-0.5">Signature Électronique Certifiée ✓</span>
+              <div className="text-right space-y-1 min-w-[220px]">
+                <p className="text-xs font-semibold text-slate-600">
+                  Fait à Kaolack, le <strong className="text-slate-900">{new Date(record?.date || Date.now()).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}</strong>
+                </p>
+                <p className="text-xs font-bold text-slate-950 mt-1">Le Médecin Spécialiste Traitant</p>
+                <p className="text-xs text-slate-900 font-black">{record?.doctorName || currentUser?.name || 'Dr. Cheikh Ndao'}</p>
+                <p className="text-3xs text-slate-500 font-mono">N° Inscription CNOM : SN-1428</p>
+                <div className="mt-2 w-48 h-20 border border-slate-300 rounded-lg ml-auto bg-slate-50/50 flex flex-col justify-between p-2 text-center">
+                  <span className="text-[8px] font-bold uppercase tracking-wider text-slate-400">
+                    Cadre réservé au Cachet & Signature
+                  </span>
+                  <span className="text-[7px] text-slate-300 font-mono">
+                    Visa & Empreinte du Praticien
+                  </span>
                 </div>
               </div>
             </div>

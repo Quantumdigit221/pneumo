@@ -8,10 +8,10 @@
 }
 
 @media print {
-  /* 1. Official A4 Page Setup */
+  /* 1. Official A4 Page Setup with balanced margins */
   @page {
     size: A4 portrait;
-    margin: 8mm 12mm 10mm 12mm;
+    margin: 7mm 7mm 7mm 7mm;
   }
 
   /* 2. Global Document Reset for Crisp High-Contrast Output */
@@ -107,15 +107,17 @@
     display: block !important;
   }
 
-  /* 5. A4 Document Sheet Architecture */
+  /* 5. A4 Document Sheet Architecture — Official Framed Contour */
   .a4-document-sheet {
     width: 100% !important;
     max-width: 100% !important;
     margin: 0 auto !important;
-    padding: 0 !important;
+    padding: 6mm 7mm !important;
     background: #ffffff !important;
     color: #090d16 !important;
-    border: none !important;
+    border: 1.5pt solid #1e293b !important;
+    border-radius: 4px !important;
+    box-sizing: border-box !important;
     box-shadow: none !important;
     font-size: 8.8pt !important;
     line-height: 1.38 !important;

@@ -567,6 +567,7 @@ export const MedicalImagingAI: React.FC = () => {
           <span>Visualiseur & Analyse Thoracique</span>
         </button>
 
+
         <button
           onClick={() => setActiveTab('REGISTRE')}
           className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
@@ -1343,7 +1344,7 @@ export const MedicalImagingAI: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <ShieldCheck className="w-5 h-5 text-emerald-600" />
                     <div>
-                      <span className="font-bold block">Signé électroniquement par : {currentReport.signedByDoctorName}</span>
+                      <span className="font-bold block">Validé par le Praticien : {currentReport.signedByDoctorName}</span>
                       <span className="text-xxs text-emerald-700 font-mono">Date : {currentReport.signedAt} • CHREIN Kaolack</span>
                     </div>
                   </div>
@@ -1416,6 +1417,7 @@ export const MedicalImagingAI: React.FC = () => {
           )}
         </div>
       )}
+
 
       {/* =====================================================================
           TAB 2 : REGISTRE DES MODÈLES D'IA & LICENCES
@@ -1833,12 +1835,14 @@ export const MedicalImagingAI: React.FC = () => {
             </div>
 
             {/* Official Printable A4 Sheet */}
-            <div className="a4-document-sheet p-8 bg-white border border-slate-300 rounded-xl space-y-5 text-slate-900 font-sans shadow-xs">
+            <div className="a4-document-sheet p-6 sm:p-8 bg-white border-2 border-slate-800 rounded-xl space-y-5 text-slate-900 font-sans shadow-sm">
               {/* National Emblem & Hospital Header Bar */}
               <div className="avoid-page-break space-y-2 border-b-2 border-slate-900 pb-4">
-                <div className="flex h-1.5 w-full rounded-full overflow-hidden">
+                <div className="flex h-2.5 w-full rounded-md border border-slate-300 overflow-hidden shadow-2xs">
                   <div className="w-1/3 bg-[#00853F]" />
-                  <div className="w-1/3 bg-[#FDEF42]" />
+                  <div className="w-1/3 bg-[#FDEF42] flex items-center justify-center">
+                    <span className="text-[#00853F] text-[9px] leading-none select-none font-bold">★</span>
+                  </div>
                   <div className="w-1/3 bg-[#E31B23]" />
                 </div>
                 <div className="text-center space-y-1">
@@ -1861,11 +1865,11 @@ export const MedicalImagingAI: React.FC = () => {
               </div>
 
               {/* Title Banner */}
-              <div className="avoid-page-break py-2.5 px-4 text-center bg-teal-50 border border-teal-200 rounded-xl">
-                <span className="font-black text-sm text-teal-950 uppercase tracking-widest block">
-                  COMPTE RENDU D'IMAGERIE THORACIQUE (CERTIFIÉ MÉDECIN)
+              <div className="avoid-page-break py-2.5 px-4 text-center bg-slate-50 border-2 border-slate-900 rounded-lg shadow-2xs">
+                <span className="font-black text-sm text-slate-950 uppercase tracking-widest block">
+                  COMPTE RENDU D'IMAGERIE THORACIQUE
                 </span>
-                <span className="text-xxs font-mono font-bold text-teal-800">
+                <span className="text-xxs font-mono font-bold text-slate-600">
                   EXAMEN N° : {currentReport.examinationId} • MODALITÉ : {uploadedFile?.dicomMeta?.modality || 'DX / RADIOGRAPHIE THORACIQUE'}
                 </span>
               </div>
@@ -1882,7 +1886,7 @@ export const MedicalImagingAI: React.FC = () => {
                   <p><span className="text-slate-500 font-medium">Date d'examen :</span> <strong>{new Date(currentReport.createdAt).toLocaleDateString('fr-FR')}</strong></p>
                   <p><span className="text-slate-500 font-medium">Praticien signataire :</span> <strong>{currentReport.signedByDoctorName || 'Dr. Cheikh Ndao'}</strong></p>
                   <p><span className="text-slate-500 font-medium">Qualification :</span> <strong>Pneumologue Référent</strong></p>
-                  <p><span className="text-slate-500 font-medium">Statut :</span> <strong className="text-emerald-700">Validé et signé électroniquement ✓</strong></p>
+                  <p><span className="text-slate-500 font-medium">Statut :</span> <strong className="text-emerald-700">Validé au Dossier Patient Informatisé (DPI)</strong></p>
                 </div>
               </div>
 
@@ -1961,13 +1965,20 @@ export const MedicalImagingAI: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="text-right space-y-1 min-w-[200px]">
-                  <p className="text-xs font-bold text-slate-900">Le Médecin Radiologue / Pneumologue</p>
-                  <p className="text-xs text-teal-700 font-extrabold">{currentReport.signedByDoctorName || 'Dr. Cheikh Ndao'}</p>
-                  <div className="w-40 h-16 border-2 border-dashed border-teal-300 bg-teal-50/40 rounded-xl mt-1 flex flex-col items-center justify-center text-[9px] text-teal-800 font-semibold p-1">
-                    <span>Cachet Officiel CHREIN</span>
-                    <span className="text-[8px] text-teal-600">Unité d'Imagerie Thoracique</span>
-                    <span className="text-[8px] text-slate-500">Signé électroniquement ✓</span>
+                <div className="text-right space-y-1 min-w-[220px]">
+                  <p className="text-xs font-semibold text-slate-600">
+                    Fait à Kaolack, le <strong className="text-slate-900">{new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}</strong>
+                  </p>
+                  <p className="text-xs font-bold text-slate-950 mt-1">Le Médecin Radiologue / Pneumologue</p>
+                  <p className="text-xs text-slate-900 font-black">{currentReport.signedByDoctorName || 'Dr. Cheikh Ndao'}</p>
+                  <p className="text-3xs text-slate-500 font-mono">N° Inscription CNOM : SN-1428</p>
+                  <div className="mt-2 w-48 h-20 border border-slate-300 rounded-lg ml-auto bg-slate-50/50 flex flex-col justify-between p-2 text-center">
+                    <span className="text-[8px] font-bold uppercase tracking-wider text-slate-400">
+                      Cadre réservé au Cachet & Signature
+                    </span>
+                    <span className="text-[7px] text-slate-300 font-mono">
+                      Visa & Empreinte du Praticien
+                    </span>
                   </div>
                 </div>
               </div>

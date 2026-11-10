@@ -487,17 +487,22 @@ export const ResearchAndStats: React.FC = () => {
             </div>
 
             {/* Official Printable A4 Sheet */}
-            <div className="a4-document-sheet p-8 bg-white border border-slate-300 rounded-xl space-y-5 text-slate-900 font-sans shadow-xs">
+            <div className="a4-document-sheet p-6 sm:p-8 bg-white border-2 border-slate-800 rounded-xl space-y-5 text-slate-900 font-sans shadow-sm">
               {/* National Emblem & Hospital Header Bar */}
               <div className="avoid-page-break space-y-2 border-b-2 border-slate-900 pb-4">
-                <div className="flex h-1.5 w-full rounded-full overflow-hidden">
+                <div className="flex h-2.5 w-full rounded-md border border-slate-300 overflow-hidden shadow-2xs">
                   <div className="w-1/3 bg-[#00853F]" />
-                  <div className="w-1/3 bg-[#FDEF42]" />
+                  <div className="w-1/3 bg-[#FDEF42] flex items-center justify-center">
+                    <span className="text-[#00853F] text-[9px] leading-none select-none font-bold">★</span>
+                  </div>
                   <div className="w-1/3 bg-[#E31B23]" />
                 </div>
                 <div className="text-center space-y-1">
                   <p className="text-[10px] font-black uppercase tracking-widest text-slate-700">
-                    RÉPUBLIQUE DU SÉNÉGAL • MINISTÈRE DE LA SANTÉ ET DE L'ACTION SOCIALE
+                    RÉPUBLIQUE DU SÉNÉGAL • Un Peuple - Un But - Une Foi
+                  </p>
+                  <p className="text-[9px] font-bold uppercase tracking-wider text-slate-600">
+                    MINISTÈRE DE LA SANTÉ ET DE L'ACTION SOCIALE
                   </p>
                   <h2 className="text-base font-black text-slate-950 uppercase tracking-tight">
                     CENTRE HOSPITALIER RÉGIONAL EL HADJI IBRAHIMA NIASS (CHREIN) — KAOLACK
@@ -512,11 +517,11 @@ export const ResearchAndStats: React.FC = () => {
               </div>
 
               {/* Title Banner */}
-              <div className="avoid-page-break py-2.5 px-4 text-center bg-teal-50 border border-teal-200 rounded-xl">
-                <span className="font-black text-sm text-teal-950 uppercase tracking-widest block">
+              <div className="avoid-page-break py-2.5 px-4 text-center bg-slate-50 border-2 border-slate-900 rounded-lg shadow-2xs">
+                <span className="font-black text-sm text-slate-950 uppercase tracking-widest block">
                   RAPPORT D'ACTIVITÉ CLINIQUE, ÉPIDÉMIOLOGIQUE & DE RECHERCHE
                 </span>
-                <span className="text-xxs font-mono font-bold text-teal-800">
+                <span className="text-xxs font-mono font-bold text-slate-600">
                   PÉRIODE : 1ER TRIMESTRE 2026 • FILE ACTIVE : {filteredPatients.length} PATIENTS SUIVIS
                 </span>
               </div>
@@ -631,13 +636,20 @@ export const ResearchAndStats: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="text-right space-y-1 min-w-[200px]">
-                  <p className="text-xs font-bold text-slate-900">Le Médecin Chef de Service</p>
-                  <p className="text-xs text-teal-700 font-extrabold">Dr. Cheikh Ndao</p>
-                  <div className="w-40 h-16 border-2 border-dashed border-teal-300 bg-teal-50/40 rounded-xl mt-1 flex flex-col items-center justify-center text-[9px] text-teal-800 font-semibold p-1">
-                    <span>Cachet Officiel CHREIN</span>
-                    <span className="text-[8px] text-teal-600">Pneumologie & Maladies Infectieuses</span>
-                    <span className="text-[8px] text-slate-500">Signé et certifié conforme ✓</span>
+                <div className="text-right space-y-1 min-w-[220px]">
+                  <p className="text-xs font-semibold text-slate-600">
+                    Fait à Kaolack, le <strong className="text-slate-900">{new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}</strong>
+                  </p>
+                  <p className="text-xs font-bold text-slate-950 mt-1">Le Médecin Chef de Service</p>
+                  <p className="text-xs text-slate-900 font-black">Dr. Cheikh Ndao</p>
+                  <p className="text-3xs text-slate-500 font-mono">N° Inscription CNOM : SN-1428</p>
+                  <div className="mt-2 w-48 h-20 border border-slate-300 rounded-lg ml-auto bg-slate-50/50 flex flex-col justify-between p-2 text-center">
+                    <span className="text-[8px] font-bold uppercase tracking-wider text-slate-400">
+                      Cadre réservé au Cachet & Signature
+                    </span>
+                    <span className="text-[7px] text-slate-300 font-mono">
+                      Direction Médicale CHREIN
+                    </span>
                   </div>
                 </div>
               </div>
