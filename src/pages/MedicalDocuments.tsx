@@ -824,17 +824,17 @@ export const MedicalDocuments: React.FC = () => {
               )}
 
               {/* Main Document Body */}
-              <div className="p-5 bg-white border border-slate-200 rounded-xl text-xs leading-relaxed font-mono whitespace-pre-line text-slate-800 break-words">
+              <div className="p-6 bg-white border border-slate-300 rounded-xl text-xs leading-relaxed font-sans text-slate-900 whitespace-pre-line break-words shadow-2xs">
                 {activePreviewDoc.content}
               </div>
 
               {/* Specific Metadata Highlights */}
               {activePreviewDoc.metadata?.medicationsPrescribed && (
-                <div className="avoid-page-break p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-                  <span className="text-3xs uppercase font-extrabold text-slate-500 block">
+                <div className="avoid-page-break p-4 bg-slate-50 border border-slate-300 rounded-xl space-y-1">
+                  <span className="text-3xs uppercase font-extrabold text-teal-900 block">
                     Prescriptions Détaillées / Posologie :
                   </span>
-                  <p className="font-mono text-xs whitespace-pre-line text-slate-900">
+                  <p className="font-sans text-xs font-medium whitespace-pre-line text-slate-950 leading-relaxed">
                     {activePreviewDoc.metadata.medicationsPrescribed}
                   </p>
                 </div>

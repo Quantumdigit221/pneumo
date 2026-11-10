@@ -1614,7 +1614,7 @@ export function Hospitalization() {
                   <h4 className="text-[11px] font-black uppercase tracking-wider text-teal-900 border-b pb-1">
                     3. Traitement de Sortie Prescrit & Posologie
                   </h4>
-                  <div className="p-3.5 bg-white border border-slate-200 rounded-xl text-xs font-mono text-slate-900 whitespace-pre-line leading-relaxed">
+                  <div className="p-4 bg-white border border-slate-300 rounded-xl text-xs font-sans font-medium text-slate-950 whitespace-pre-line leading-relaxed shadow-2xs">
                     {dischargeTreatments || 'Ordonnance remise au patient selon protocole du service.'}
                   </div>
                 </div>

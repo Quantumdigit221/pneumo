@@ -4836,7 +4836,7 @@ export const Consultations: React.FC = () => {
 
                   <div className="avoid-page-break p-3.5 bg-white border border-slate-200 rounded-xl space-y-1.5">
                     <h4 className="font-black uppercase text-teal-900 text-xxs border-b pb-1">4. Conduite Thérapeutique & Traitement</h4>
-                    <p className="font-mono whitespace-pre-line text-slate-800 text-xxs leading-relaxed">
+                    <p className="font-sans whitespace-pre-line text-slate-900 text-xs leading-relaxed font-medium">
                       {form12Steps.managementPlan.medicationsPrescribed || 'Plan de soins en cours de stabilisation.'}
                     </p>
                   </div>
@@ -4849,7 +4849,7 @@ export const Consultations: React.FC = () => {
                   <div className="avoid-page-break py-2 text-center bg-teal-50 rounded-lg border border-teal-200">
                     <span className="font-black text-xs text-teal-950 uppercase tracking-widest">ORDONNANCE MÉDICALE SÉCURISÉE</span>
                   </div>
-                  <div className="avoid-page-break p-5 bg-white border border-slate-200 rounded-xl font-mono text-xs leading-loose whitespace-pre-line text-slate-900">
+                  <div className="avoid-page-break p-6 bg-white border border-slate-300 rounded-xl font-sans text-xs font-medium leading-loose whitespace-pre-line text-slate-950 shadow-2xs">
                     {form12Steps.managementPlan.medicationsPrescribed || 'Aucun médicament saisi dans cette consultation.'}
                   </div>
                   <div className="avoid-page-break p-3 bg-amber-50/70 border border-amber-200 rounded-lg text-3xs text-amber-900">

@@ -44,6 +44,14 @@
     display: none !important;
   }
 
+  /* Deflex app containers so Chromium and WebKit paginate multi-page documents seamlessly */
+  #root, #root > div, #root > div > div, main, main > div {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+  }
+
   /* When an active print modal is displayed, isolate the print modal and hide all background pages */
   body:has(.print-modal-active) #root > div > aside,
   body:has(.print-modal-active) #root > div > div > header,
