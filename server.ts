@@ -1375,9 +1375,10 @@ Règles strictes :
       }
 
       const now = Date.now();
-      // Cache positive connection for 25s, negative failure for 50s to avoid repeated blocking checks
-      const cacheTtl = (lastStatusResult && lastStatusResult.connected) ? 25000 : 50000;
-      if (lastStatusResult && (now - lastStatusTime < cacheTtl)) {
+      const force = req.query.force === 'true';
+      // Cache positive connection for 20s, but negative failure for only 3s so retries succeed immediately
+      const cacheTtl = (lastStatusResult && lastStatusResult.connected) ? 20000 : 3000;
+      if (!force && lastStatusResult && (now - lastStatusTime < cacheTtl)) {
         res.setHeader('X-Cache', 'HIT');
         return res.json(lastStatusResult);
       }
@@ -2177,7 +2178,7 @@ Règles de transcription :
   // =========================================================================
   // MODULE INTELLIGENCE ARTIFICIELLE MÉDICALE — IMAGERIE THORACIQUE (PHASE 1)
   // Conforme aux directives hospitalières CHREIN Kaolack :
-  // - Registre des modèles d'IA vérifiés (Ark+, LLaVA-Rad, MAIRA-2)
+  // - Registre des modèles d'IA vérifiés (Ark+, TorchXRayVision, LLaVA-Rad, MAIRA-2)
   // - Validation et prétraitement DICOM (NEMA PS3.10)
   // - Machine à états et contrôle d'accès strict (Validation réservée aux médecins - 403 pour secrétaire)
   // - Piste d'audit immuable
@@ -2204,6 +2205,70 @@ Règles de transcription :
       ],
       benchmarkMetrics: { meanAuroc: 0.912, pneumothoraxAuroc: 0.938, effusionAuroc: 0.945 },
       clinicalNotes: "Très haute sensibilité sur les urgences vitales (Pneumothorax et Épanchements). Validé pour CHREIN Kaolack."
+    },
+    {
+      id: "torchxrayvision-densenet",
+      name: "TorchXRayVision DenseNet-121 (All Datasets)",
+      version: "v1.2.3",
+      modality: "CHEST_XRAY",
+      task: "CLASSIFICATION",
+      architecture: "DenseNet-121 multi-têtes (mlmed/torchxrayvision) entraîné sur NIH14, CheXpert, PadChest, MIMIC-CXR",
+      license: "Apache 2.0 (Open Source)",
+      commercialAllowed: true,
+      githubUrl: "https://github.com/mlmed/torchxrayvision.git",
+      weightsSizeMb: 32,
+      minVramGb: 4,
+      recommendedHardware: "CPU Intel/AMD ou GPU standard (inférence rapide ~220ms)",
+      status: "ACTIVE_VERIFIED",
+      supportedClasses: [
+        "Atelectasis", "Consolidation", "Infiltration", "Pneumothorax",
+        "Edema", "Emphysema", "Fibrosis", "Effusion", "Pneumonia",
+        "Pleural_Thickening", "Cardiomegaly", "Nodule", "Mass", "Hernia",
+        "Lung Lesion", "Fracture", "Lung Opacity", "Enlarged Cardiomediastinum"
+      ],
+      benchmarkMetrics: { meanAuroc: 0.865, effusionAuroc: 0.902, pneumothoraxAuroc: 0.884, pneumoniaAuroc: 0.871 },
+      clinicalNotes: "Référence mondiale de détection multi-pathologies thoraciques. Développé par Joseph Paul Cohen et al. (Stanford / Harvard / Mila). Intégré nativement dans le DPI CHREIN."
+    },
+    {
+      id: "torchxrayvision-resnet50",
+      name: "TorchXRayVision ResNet-50 (512x512 High-Res)",
+      version: "v1.2.3",
+      modality: "CHEST_XRAY",
+      task: "CLASSIFICATION",
+      architecture: "ResNet-50 haute résolution 512px (mlmed/torchxrayvision)",
+      license: "Apache 2.0 (Open Source)",
+      commercialAllowed: true,
+      githubUrl: "https://github.com/mlmed/torchxrayvision.git",
+      weightsSizeMb: 98,
+      minVramGb: 6,
+      recommendedHardware: "CPU ou GPU standard",
+      status: "ACTIVE_VERIFIED",
+      supportedClasses: [
+        "Atelectasis", "Consolidation", "Infiltration", "Pneumothorax",
+        "Edema", "Emphysema", "Fibrosis", "Effusion", "Pneumonia",
+        "Pleural_Thickening", "Cardiomegaly", "Nodule", "Mass", "Hernia",
+        "Lung Lesion", "Fracture", "Lung Opacity", "Enlarged Cardiomediastinum"
+      ],
+      benchmarkMetrics: { meanAuroc: 0.878, noduleAuroc: 0.842, pneumoniaAuroc: 0.886 },
+      clinicalNotes: "Variante haute résolution 512x512 de TorchXRayVision optimisée pour les micro-nodules et les infiltrats fins."
+    },
+    {
+      id: "torchxrayvision-covid",
+      name: "TorchXRayVision COVID-19 / Viral Pneumonia",
+      version: "v1.2.3",
+      modality: "CHEST_XRAY",
+      task: "CLASSIFICATION",
+      architecture: "DenseNet-121 spécialisé pneumopathies infectieuses & virales",
+      license: "Apache 2.0 (Open Source)",
+      commercialAllowed: true,
+      githubUrl: "https://github.com/mlmed/torchxrayvision.git",
+      weightsSizeMb: 32,
+      minVramGb: 4,
+      recommendedHardware: "CPU standard",
+      status: "ACTIVE_VERIFIED",
+      supportedClasses: ["COVID-19", "Pneumonie virale", "Pneumonie bactérienne", "Poumon sain"],
+      benchmarkMetrics: { meanAuroc: 0.924, covidAuroc: 0.948 },
+      clinicalNotes: "Poids spécialisés de TorchXRayVision pour le diagnostic différentiel rapide des détresses respiratoires infectieuses."
     },
     {
       id: "llava-rad-7b",

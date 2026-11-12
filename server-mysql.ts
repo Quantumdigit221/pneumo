@@ -36,7 +36,7 @@ export async function getMysqlPool(): Promise<mysql.Pool | null> {
         waitForConnections: true,
         connectionLimit: 10,
         queueLimit: 0,
-        connectTimeout: 2500 // 2.5 seconds timeout for fast failover
+        connectTimeout: 7000 // 7 seconds timeout for reliable cloud DB handshake
       });
       console.log("[Hostinger MySQL] Pool de connexion créé avec succès.");
     } catch (err: any) {
@@ -77,14 +77,14 @@ export async function checkConnection(): Promise<{ connected: boolean; error: st
       return { connected: false, error: lastError || "Impossible d'initialiser le pool MySQL.", dbInfo };
     }
     
-    // Fast ping with strict 2.5s timeout promise race
+    // Fast ping with 7s timeout promise race
     const pingTask = async () => {
       connection = await activePool.getConnection();
       await connection.ping();
     };
 
     const timeoutTask = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Délai de connexion Hostinger MySQL dépassé (2.5s)")), 2500)
+      setTimeout(() => reject(new Error("Délai de connexion Hostinger MySQL dépassé (7s)")), 7000)
     );
 
     await Promise.race([pingTask(), timeoutTask]);

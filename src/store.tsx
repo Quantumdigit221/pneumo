@@ -1637,9 +1637,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setUseHostingerState(true);
   };
 
-  const checkHostingerStatus = async () => {
+  const checkHostingerStatus = async (force: boolean = false) => {
     try {
-      const res = await fetch('/api/mysql/status');
+      const res = await fetch(`/api/mysql/status${force ? '?force=true' : ''}`);
       if (!res.ok) {
         throw new Error(`Erreur HTTP: ${res.status}`);
       }
@@ -1925,6 +1925,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } else {
       checkHostingerStatus();
     }
+
+    // Periodic heartbeat to keep Hostinger database status continuously synchronized
+    const timer = setInterval(() => {
+      checkHostingerStatus();
+    }, 25000);
+
+    return () => clearInterval(timer);
   }, [useHostinger]);
 
   const login = async (email: string, password?: string): Promise<boolean> => {

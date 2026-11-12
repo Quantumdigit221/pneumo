@@ -33,6 +33,7 @@ import {
   Image as ImageIcon,
   Trash2,
   QrCode,
+  ExternalLink,
   X
 } from 'lucide-react';
 import { parseDicomBuffer, DicomMetadata, generateSyntheticTestDicom } from '../utils/dicomParser';
@@ -160,7 +161,7 @@ export const MedicalImagingAI: React.FC = () => {
   const { currentUser } = useStore();
 
   // Navigation tab state
-  const [activeTab, setActiveTab] = useState<'VIEWER_ANALYSE' | 'REGISTRE' | 'COMPTES_RENDUS' | 'EVALUATION' | 'ARCHITECTURE'>('VIEWER_ANALYSE');
+  const [activeTab, setActiveTab] = useState<'VIEWER_ANALYSE' | 'TORCHXRAYVISION' | 'REGISTRE' | 'COMPTES_RENDUS' | 'EVALUATION' | 'ARCHITECTURE'>('VIEWER_ANALYSE');
 
   // Active simulated role for RBAC testing
   const [simulatedRole, setSimulatedRole] = useState<string>(currentUser?.role || 'CLINICIAN');
@@ -180,6 +181,13 @@ export const MedicalImagingAI: React.FC = () => {
   const [zoomLevel, setZoomLevel] = useState(1);
   const [showDicomMetadata, setShowDicomMetadata] = useState(false);
   const [showLesionOverlay, setShowLesionOverlay] = useState(true);
+
+  // TorchXRayVision Engine State
+  const [txrvVariant, setTxrvVariant] = useState<string>('densenet121-res224-all');
+  const [isTxrvLoading, setIsTxrvLoading] = useState<boolean>(false);
+  const [txrvData, setTxrvData] = useState<any | null>(null);
+  const [showGradCam, setShowGradCam] = useState<boolean>(true);
+  const [txrvCategoryFilter, setTxrvCategoryFilter] = useState<string>('ALL');
 
   // Uploaded File State (DICOM / Medical Images)
   const [uploadedFile, setUploadedFile] = useState<{
@@ -427,6 +435,47 @@ export const MedicalImagingAI: React.FC = () => {
     }
   };
 
+  // Run TorchXRayVision Inference
+  const handleRunTorchXRayVision = async () => {
+    setIsTxrvLoading(true);
+    setErrorMessage(null);
+    setSuccessNotice(null);
+
+    try {
+      const res = await fetch('/api/v1/imaging-ai/torchxrayvision/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          modelVariant: txrvVariant,
+          clinicalContext,
+          patientId: uploadedFile?.dicomMeta?.patientId || selectedCase.patientId,
+          patientName: uploadedFile?.dicomMeta?.patientName || selectedCase.patientName,
+          patientHospitalNumber: uploadedFile?.dicomMeta?.patientId || selectedCase.hospitalNumber,
+          filename: uploadedFile?.name || `${selectedCase.id}.dcm`
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setErrorMessage(data.error || 'Erreur lors de l’analyse TorchXRayVision.');
+        return;
+      }
+
+      setTxrvData(data);
+      if (data.report) {
+        setCurrentReport(data.report);
+        setEditedFindings(data.report.findings);
+        setEditedConclusion(data.report.conclusion);
+        fetchExistingReports();
+      }
+      setSuccessNotice(`Inférence TorchXRayVision (${data.modelVariant}) exécutée avec succès en ${data.inferenceTimeMs}ms. 18 pathologies analysées.`);
+    } catch (e: any) {
+      setErrorMessage(e.message || 'Impossible de joindre le moteur TorchXRayVision.');
+    } finally {
+      setIsTxrvLoading(false);
+    }
+  };
+
   // Validate and Sign Report (RBAC Check)
   const handleValidateAndSign = async () => {
     if (!currentReport) return;
@@ -567,6 +616,20 @@ export const MedicalImagingAI: React.FC = () => {
           <span>Visualiseur & Analyse Thoracique</span>
         </button>
 
+        <button
+          onClick={() => setActiveTab('TORCHXRAYVISION')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+            activeTab === 'TORCHXRAYVISION'
+              ? 'bg-emerald-700 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+          }`}
+        >
+          <Cpu className="w-4 h-4 text-emerald-300" />
+          <span>TorchXRayVision (TXRV)</span>
+          <span className="ml-1 text-3xs px-1.5 py-0.2 bg-emerald-100 text-emerald-900 rounded font-bold font-mono">
+            18 Pathologies
+          </span>
+        </button>
 
         <button
           onClick={() => setActiveTab('REGISTRE')}
@@ -1415,6 +1478,342 @@ export const MedicalImagingAI: React.FC = () => {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* =====================================================================
+          TAB 1b : TORCHXRAYVISION (mlmed/torchxrayvision) STUDIO D'ANALYSE
+      ====================================================================== */}
+      {activeTab === 'TORCHXRAYVISION' && (
+        <div className="space-y-6">
+          {/* Header Banner */}
+          <div className="bg-gradient-to-r from-slate-900 via-emerald-950 to-slate-900 border border-emerald-800/40 p-6 rounded-2xl text-white shadow-md">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 rounded-xl bg-emerald-500/20 border border-emerald-400/30 text-emerald-300">
+                    <Cpu className="w-5 h-5" />
+                  </div>
+                  <h2 className="text-lg font-black tracking-tight text-white flex items-center gap-2">
+                    <span>TorchXRayVision (TXRV)</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 font-mono font-normal">
+                      v1.2.3
+                    </span>
+                  </h2>
+                </div>
+                <p className="text-xs text-slate-300 leading-relaxed max-w-2xl">
+                  Intégration de la bibliothèque d'apprentissage profond pour l'imagerie thoracique.
+                  Détection simultanée de 18 pathologies avec fenêtrage radiologique normalisé et cartes d'attention Grad-CAM.
+                </p>
+                <div className="flex flex-wrap items-center gap-3 pt-1 text-3xs font-mono text-slate-400">
+                  <span>Auteurs : Joseph Paul Cohen et al. (Stanford / Harvard / Mila)</span>
+                  <span>•</span>
+                  <span>Licence : Apache 2.0 (Open Source)</span>
+                  <span>•</span>
+                  <span>Entraîné sur 140 000+ clichés</span>
+                </div>
+              </div>
+
+              <div className="flex flex-col sm:flex-row md:flex-col gap-2 shrink-0">
+                <a
+                  href="https://github.com/mlmed/torchxrayvision.git"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold text-xs transition shadow-xs"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Dépôt GitHub mlmed/torchxrayvision</span>
+                </a>
+                <div className="px-3 py-1.5 rounded-lg bg-emerald-900/60 border border-emerald-700/50 text-emerald-200 text-center font-mono text-3xs">
+                  Normalisation [-1024, 1024]
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Controls Bar : Model Variant & Actions */}
+          <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-xs flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                <Sliders className="w-3.5 h-3.5 text-teal-600" />
+                <span>Modèle TorchXRayVision :</span>
+              </label>
+              <select
+                value={txrvVariant}
+                onChange={(e) => setTxrvVariant(e.target.value)}
+                className="bg-slate-50 border border-slate-300 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-teal-600"
+              >
+                <option value="densenet121-res224-all">DenseNet-121 (All Datasets - 18 Pathologies - Recommandé)</option>
+                <option value="resnet50-res512-all">ResNet-50 (Haute Résolution 512px - Micro-nodules)</option>
+                <option value="densenet121-res224-covid">DenseNet-121 (Spécialisé COVID-19 & Détresses Virales)</option>
+                <option value="densenet121-res224-chex">DenseNet-121 (Stanford CheXpert)</option>
+              </select>
+
+              <button
+                type="button"
+                onClick={() => setShowGradCam(!showGradCam)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-bold transition cursor-pointer ${
+                  showGradCam
+                    ? 'bg-amber-50 text-amber-900 border-amber-300'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <Sparkles className={`w-3.5 h-3.5 ${showGradCam ? 'text-amber-600' : 'text-slate-400'}`} />
+                <span>Carte Grad-CAM (Saliency) : {showGradCam ? 'Activée' : 'Masquée'}</span>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              disabled={isTxrvLoading}
+              onClick={handleRunTorchXRayVision}
+              className="flex items-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition shadow-xs disabled:opacity-50 cursor-pointer"
+            >
+              <RefreshCw className={`w-4 h-4 ${isTxrvLoading ? 'animate-spin' : ''}`} />
+              <span>{isTxrvLoading ? 'Calcul des 18 pathologies...' : 'Lancer l’inférence TorchXRayVision'}</span>
+            </button>
+          </div>
+
+          {/* 2-Column Workspace : Left Viewer, Right 18 Pathologies Matrix */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* Left Viewer (5 cols) */}
+            <div className="lg:col-span-5 space-y-4">
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 text-white shadow-md relative overflow-hidden flex flex-col justify-between">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800 text-xs text-slate-300">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span className="font-bold text-white text-xs truncate max-w-[200px]">
+                      {uploadedFile ? uploadedFile.name : selectedCase.title}
+                    </span>
+                  </div>
+                  <span className="text-3xs font-mono text-emerald-400 font-bold bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800">
+                    TXRV Ready
+                  </span>
+                </div>
+
+                {/* X-ray container with Grad-CAM heatmap overlay */}
+                <div className="relative my-4 flex items-center justify-center overflow-hidden rounded-xl bg-black border border-slate-800 min-h-[380px]">
+                  <div
+                    className={`w-full h-96 relative flex items-center justify-center transition-all duration-200 select-none ${
+                      uploadedFile?.renderedDataUrl ? 'bg-black' : selectedCase.previewGradient
+                    }`}
+                  >
+                    {uploadedFile?.renderedDataUrl ? (
+                      <img
+                        src={uploadedFile.renderedDataUrl}
+                        alt="Cliché"
+                        className="max-h-96 max-w-full object-contain"
+                      />
+                    ) : (
+                      <svg viewBox="0 0 400 400" className="w-80 h-80 opacity-80" fill="none" stroke="currentColor">
+                        <path d="M200 40 L200 360" stroke="#94a3b8" strokeWidth="6" strokeDasharray="6 4" />
+                        <path d="M200 40 L200 130 M200 130 L160 170 M200 130 L240 170" stroke="#cbd5e1" strokeWidth="4" />
+                        <path d="M200 80 Q140 90 90 140 Q150 160 200 110" stroke="#64748b" strokeWidth="3" opacity="0.6" />
+                        <path d="M200 80 Q260 90 310 140 Q250 160 200 110" stroke="#64748b" strokeWidth="3" opacity="0.6" />
+                        <path d="M200 120 Q130 140 70 200 Q140 220 200 160" stroke="#64748b" strokeWidth="3" opacity="0.6" />
+                        <path d="M200 120 Q270 140 330 200 Q260 220 200 160" stroke="#64748b" strokeWidth="3" opacity="0.6" />
+                        <ellipse cx="200" cy="240" rx="60" ry="75" stroke="#475569" strokeWidth="3" opacity="0.5" />
+                      </svg>
+                    )}
+
+                    {/* Grad-CAM Saliency Hotspot Overlays */}
+                    {showGradCam && txrvData?.gradcamHotspots?.map((hotspot: any) => (
+                      <div
+                        key={hotspot.id}
+                        className="absolute pointer-events-none rounded-full animate-pulse flex items-center justify-center"
+                        style={{
+                          left: `${hotspot.x}%`,
+                          top: `${hotspot.y}%`,
+                          width: `${hotspot.radius * 4.5}px`,
+                          height: `${hotspot.radius * 4.5}px`,
+                          transform: 'translate(-50%, -50%)',
+                          background: 'radial-gradient(circle, rgba(239,68,68,0.75) 0%, rgba(245,158,11,0.55) 45%, rgba(6,182,212,0.25) 75%, transparent 100%)',
+                          boxShadow: '0 0 25px rgba(239,68,68,0.6)'
+                        }}
+                      >
+                        <span className="text-[9px] font-black font-mono text-white bg-black/80 px-1.5 py-0.5 rounded shadow border border-red-400">
+                          {hotspot.pathology}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-xxs text-slate-400 pt-2 border-t border-slate-800">
+                  <span>Prétraitement : TorchXRayVision rescaled</span>
+                  <span className="font-mono">Inférence : ~220ms</span>
+                </div>
+              </div>
+
+              {/* Case Switcher */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2">
+                <span className="text-xxs font-extrabold uppercase tracking-wider text-slate-400 block">
+                  Sélectionner un Cliché Témoin
+                </span>
+                <div className="grid grid-cols-2 gap-2">
+                  {SAMPLE_CHEST_XRAYS.map(c => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedCase(c);
+                        setClinicalContext(c.indication);
+                        setUploadedFile(null);
+                        setTxrvData(null);
+                      }}
+                      className={`p-2 rounded-xl text-left border transition text-xs ${
+                        selectedCase.id === c.id && !uploadedFile
+                          ? 'border-emerald-500 bg-emerald-50/70'
+                          : 'border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span className="font-bold text-slate-800 block truncate">{c.title}</span>
+                      <span className="text-3xs text-slate-500">{c.patientName}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Right Matrix : 18 Pathologies (7 cols) */}
+            <div className="lg:col-span-7 space-y-4">
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                  <div>
+                    <h3 className="text-sm font-black text-slate-900 uppercase tracking-tight flex items-center gap-2">
+                      <span>Spectre des 18 Pathologies TorchXRayVision</span>
+                      {txrvData && (
+                        <span className="text-3xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold font-mono">
+                          {txrvData.pathologyPredictions.filter((p: any) => p.isDetected).length} Détectée(s)
+                        </span>
+                      )}
+                    </h3>
+                    <p className="text-xxs text-slate-500">
+                      Probabilités calibrées multi-têtes avec seuils d'alertes cliniques pour le CHREIN Kaolack.
+                    </p>
+                  </div>
+
+                  {/* Category Filter Pills */}
+                  <div className="flex flex-wrap items-center gap-1 text-3xs font-bold">
+                    {['ALL', 'Infectieux', 'Plèvre', 'Parenchyme', 'Cardiovasculaire'].map(cat => (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => setTxrvCategoryFilter(cat)}
+                        className={`px-2.5 py-1 rounded-lg border transition ${
+                          txrvCategoryFilter === cat
+                            ? 'bg-slate-900 text-white border-slate-900'
+                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {cat === 'ALL' ? 'Toutes (18)' : cat}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {!txrvData ? (
+                  <div className="p-8 text-center bg-slate-50 border border-dashed border-slate-300 rounded-xl space-y-3">
+                    <Cpu className="w-10 h-10 text-slate-300 mx-auto" />
+                    <p className="text-xs text-slate-600 font-semibold">
+                      Cliquez sur « Lancer l’inférence TorchXRayVision » pour évaluer les 18 pathologies.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleRunTorchXRayVision}
+                      disabled={isTxrvLoading}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-xs"
+                    >
+                      Lancer l’analyse maintenant
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
+                    {txrvData.pathologyPredictions
+                      .filter((p: any) => txrvCategoryFilter === 'ALL' || p.category === txrvCategoryFilter)
+                      .map((p: any) => {
+                        const pct = Math.round(p.probability * 100);
+                        const isCrit = p.severity === 'CRITIQUE';
+                        const isSusp = p.severity === 'SUSPECT';
+                        return (
+                          <div
+                            key={p.pathology}
+                            className={`p-3 rounded-xl border transition ${
+                              isCrit
+                                ? 'bg-red-50/70 border-red-300'
+                                : isSusp
+                                ? 'bg-amber-50/60 border-amber-300'
+                                : 'bg-slate-50/40 border-slate-200'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between text-xs mb-1.5">
+                              <div>
+                                <strong className="text-slate-900">{p.pathologyFr}</strong>
+                                <span className="text-3xs text-slate-400 font-mono ml-1.5">({p.pathology})</span>
+                                <span className="ml-2 text-3xs px-1.5 py-0.2 rounded bg-slate-100 text-slate-600 font-medium">
+                                  {p.category}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className={`text-3xs font-bold font-mono px-2 py-0.5 rounded ${
+                                  isCrit
+                                    ? 'bg-red-600 text-white animate-pulse'
+                                    : isSusp
+                                    ? 'bg-amber-500 text-white'
+                                    : 'bg-emerald-100 text-emerald-800'
+                                }`}>
+                                  {p.severity}
+                                </span>
+                                <span className="font-mono font-black text-xs text-slate-900 w-12 text-right">
+                                  {pct}%
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Progress bar with threshold indicator */}
+                            <div className="relative w-full h-2 bg-slate-200 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full transition-all duration-300 ${
+                                  isCrit ? 'bg-red-600' : isSusp ? 'bg-amber-500' : 'bg-emerald-500'
+                                }`}
+                                style={{ width: `${pct}%` }}
+                              />
+                              <div
+                                className="absolute top-0 bottom-0 w-0.5 bg-slate-700"
+                                style={{ left: `${Math.round(p.threshold * 100)}%` }}
+                                title={`Seuil d'alerte : ${Math.round(p.threshold * 100)}%`}
+                              />
+                            </div>
+
+                            <div className="flex items-center justify-between text-3xs text-slate-500 mt-1 font-mono">
+                              <span>Localisation : {p.anatomicalLocation}</span>
+                              <span>Seuil alerte : {Math.round(p.threshold * 100)}%</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                )}
+
+                {/* Synthesis & Export Actions */}
+                {txrvData && (
+                  <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+                    <span className="text-xxs text-slate-500 font-mono">
+                      Inférence TorchXRayVision : {txrvData.inferenceTimeMs}ms • Rapport généré
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('VIEWER_ANALYSE')}
+                      className="flex items-center gap-1.5 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer"
+                    >
+                      <FileText className="w-4 h-4 text-emerald-400" />
+                      <span>Consulter & Valider le Compte Rendu Médical</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

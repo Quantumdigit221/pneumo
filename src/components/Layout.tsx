@@ -598,6 +598,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
           {/* Right: Hospital, User Info & Keyboard Shortcut */}
           <div className="flex items-center gap-3 shrink-0">
 
+
             {/* Active Service Badge */}
             <div className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 bg-teal-50 text-teal-800 border border-teal-200 rounded-lg text-xxs font-bold">
               <span className="w-1.5 h-1.5 rounded-full bg-teal-600 animate-pulse" />
@@ -716,7 +717,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                 onClick={async () => {
                   setIsTestingHostinger(true);
                   try {
-                    const res = await checkHostingerStatus();
+                    const res = await checkHostingerStatus(true);
                     setTestResult(res);
                   } finally {
                     setIsTestingHostinger(false);
