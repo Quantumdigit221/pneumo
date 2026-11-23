@@ -54,6 +54,8 @@ import {
   ReferenceLine
 } from 'recharts';
 import { VoiceDictationButton } from '../components/VoiceDictationButton';
+import { useSearchParams } from 'react-router-dom';
+import { calcBmi, O2_DEVICE_OPTIONS } from '../utils/dpiConstants';
 
 export function Hospitalization() {
   const {
@@ -76,11 +78,20 @@ export function Hospitalization() {
     addNurseVitalRecord
   } = useStore();
 
+  const [searchParams, setSearchParams] = useSearchParams();
+  const paramTab = searchParams.get('tab');
+  const paramHospId = searchParams.get('hospId');
+  const paramAdmit = searchParams.get('admit');
+  const paramPatientId = searchParams.get('patientId');
+
   // Search & Filter state
-  const [activeTab, setActiveTab] = useState<'beds' | 'active' | 'archived'>('beds');
+  const [activeTab, setActiveTab] = useState<'beds' | 'active' | 'archived'>(() =>
+    paramTab === 'active' || paramTab === 'archived' ? paramTab : 'beds'
+  );
   const [bedFilterCategory, setBedFilterCategory] = useState<string>('all');
   const [patientSearchQuery, setPatientSearchQuery] = useState('');
   const [voiceActionNotice, setVoiceActionNotice] = useState<string | null>(null);
+  const [admitFormError, setAdmitFormError] = useState<string | null>(null);
 
   // Direct voice action listener
   useEffect(() => {
@@ -118,6 +129,47 @@ export function Hospitalization() {
   const [admitOxygenNeed, setAdmitOxygenNeed] = useState('Air ambiant');
   const [admitEstimatedDischarge, setAdmitEstimatedDischarge] = useState('');
 
+  // Sync URL shortcut query params (?hospId=, ?admit=1&patientId=, ?tab=)
+  useEffect(() => {
+    if (paramTab === 'beds' || paramTab === 'active' || paramTab === 'archived') {
+      setActiveTab(paramTab);
+    }
+  }, [paramTab]);
+
+  useEffect(() => {
+    if (paramHospId) {
+      const targetHosp = hospitalizations.find(h => h.id === paramHospId);
+      if (targetHosp) {
+        setSelectedHospForDetail(targetHosp);
+        const next = new URLSearchParams(searchParams);
+        next.delete('hospId');
+        setSearchParams(next, { replace: true });
+      }
+    }
+  }, [paramHospId, hospitalizations, searchParams, setSearchParams]);
+
+  useEffect(() => {
+    if (paramAdmit === '1') {
+      const firstAvail = beds.find(b => b.status === 'available');
+      setAdmitBedId(firstAvail ? firstAvail.id : '');
+      setAdmitPatientId(
+        paramPatientId && patients.some(p => p.id === paramPatientId) ? paramPatientId : ''
+      );
+      setPatientDropdownSearchQuery('');
+      setIsPatientDropdownOpen(false);
+      setAdmitDoctorName('');
+      setAdmitReason('');
+      setAdmitOxygenNeed('Air ambiant');
+      setAdmitEstimatedDischarge('');
+      setAdmitFormError(null);
+      setIsAdmitModalOpen(true);
+      const next = new URLSearchParams(searchParams);
+      next.delete('admit');
+      next.delete('patientId');
+      setSearchParams(next, { replace: true });
+    }
+  }, [paramAdmit, paramPatientId, beds, patients, searchParams, setSearchParams]);
+
   // Dropdown states for searchable patient selector inside admission
   const [patientDropdownSearchQuery, setPatientDropdownSearchQuery] = useState('');
   const [isPatientDropdownOpen, setIsPatientDropdownOpen] = useState(false);
@@ -144,10 +196,14 @@ export function Hospitalization() {
   const [quickVitalBp, setQuickVitalBp] = useState('120/75');
   const [quickVitalPulse, setQuickVitalPulse] = useState(82);
   const [quickVitalRr, setQuickVitalRr] = useState(20);
+  const [quickVitalSpo2Mode, setQuickVitalSpo2Mode] = useState<'AIR_AMBIANT' | 'SOUS_O2'>('AIR_AMBIANT');
   const [quickVitalSpo2, setQuickVitalSpo2] = useState(96);
   const [quickVitalTemp, setQuickVitalTemp] = useState(37.2);
   const [quickVitalO2Flow, setQuickVitalO2Flow] = useState(2);
   const [quickVitalO2Mode, setQuickVitalO2Mode] = useState('Lunettes nasales');
+  const [quickVitalFio2, setQuickVitalFio2] = useState<string>('');
+  const [quickVitalWeight, setQuickVitalWeight] = useState<string>('');
+  const [quickVitalHeight, setQuickVitalHeight] = useState<string>('');
   const [quickVitalGlucose, setQuickVitalGlucose] = useState(1.05);
   const [quickVitalNotes, setQuickVitalNotes] = useState('');
 
@@ -247,19 +303,23 @@ export function Hospitalization() {
 
     const realPoints = matchingVitals.map((v, idx) => {
       const { systolic, diastolic } = parseBp(v.bp);
+      const isO2 = v.spo2Mode === 'SOUS_O2' || Boolean(v.o2FlowLiters && v.o2FlowLiters > 0);
       return {
         id: v.id || `real-${idx}`,
         timestamp: v.timestamp,
         displayTime: formatDisplayTime(v.timestamp),
         dayLabel: calculateDayLabel(v.timestamp, hosp.admissionDate),
         spo2: Number(v.spo2) || 96,
+        spo2Mode: v.spo2Mode || (isO2 ? 'SOUS_O2' : 'AIR_AMBIANT'),
         pulse: Number(v.pulse) || 80,
         temperature: Number(v.temperature) || 37.2,
         rr: Number(v.rr) || 20,
         systolic,
         diastolic,
-        o2FlowLiters: (v as any).o2FlowLiters ?? ((v.notes || '').includes('L/min') ? 2 : 0),
-        o2Mode: (v as any).o2Mode || 'Air ambiant',
+        o2FlowLiters: isO2 ? (v.o2FlowLiters ?? ((v.notes || '').includes('L/min') ? 2 : 0)) : 0,
+        o2Mode: isO2 ? (v.o2Device || 'Lunettes nasales') : 'Air ambiant',
+        fio2: v.fio2,
+        bmi: v.bmi,
         notes: v.notes || 'Surveillance régulière lit d\'hospitalisation',
         nurseName: v.nurseName || 'Équipe Soignante',
         isReal: true
@@ -316,13 +376,16 @@ export function Hospitalization() {
         displayTime: formatDisplayTime(pointTime.toISOString()),
         dayLabel: dayIdx === 0 ? 'J0 (Admission)' : `J+${dayIdx}`,
         spo2: Math.min(100, Math.max(70, currSpo2)),
+        spo2Mode: currO2 > 0 ? 'SOUS_O2' : 'AIR_AMBIANT',
         pulse: currPulse,
         temperature: currTemp,
         rr: currRr,
         systolic: stepSys,
         diastolic: stepDia,
         o2FlowLiters: currO2,
-        o2Mode: currO2 > 4 ? 'Masque Haute Concentration' : currO2 > 0 ? 'Lunettes nasales' : 'Air ambiant',
+        o2Mode: currO2 > 4 ? 'Masque à haute concentration' : currO2 > 0 ? 'Lunettes nasales' : 'Air ambiant',
+        fio2: undefined,
+        bmi: undefined,
         notes: step === 0
           ? `Entrée en service : ${hosp.reason}. Début oxygénothérapie.`
           : progress > 0.7
@@ -371,15 +434,17 @@ export function Hospitalization() {
     setAdmitReason('');
     setAdmitOxygenNeed('Air ambiant');
     setAdmitEstimatedDischarge('');
+    setAdmitFormError(null);
     setIsAdmitModalOpen(true);
   };
 
   const handleAdmission = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!admitPatientId || !admitBedId || !admitReason) {
-      alert("Veuillez remplir tous les champs obligatoires (*)");
+      setAdmitFormError("Veuillez sélectionner un patient, un lit disponible et saisir le motif d'hospitalisation.");
       return;
     }
+    setAdmitFormError(null);
 
     const patient = patients.find(p => p.id === admitPatientId);
     const bed = beds.find(b => b.id === admitBedId);
@@ -458,6 +523,12 @@ export function Hospitalization() {
 
   const handleSaveQuickVital = () => {
     if (!selectedHospForDetail) return;
+    const isO2 = quickVitalSpo2Mode === 'SOUS_O2';
+    const wNum = quickVitalWeight ? Number(quickVitalWeight) : undefined;
+    const hNum = quickVitalHeight ? Number(quickVitalHeight) : undefined;
+    const bmiObj = calcBmi(wNum, hNum);
+    const fio2Num = isO2 && quickVitalFio2 ? Number(quickVitalFio2) : undefined;
+
     const newVital: NurseVitalRecord = {
       id: 'vital-' + Date.now(),
       patientId: selectedHospForDetail.patientId,
@@ -468,18 +539,29 @@ export function Hospitalization() {
       pulse: Number(quickVitalPulse) || 82,
       rr: Number(quickVitalRr) || 20,
       spo2: Number(quickVitalSpo2) || 96,
+      spo2Mode: quickVitalSpo2Mode,
+      o2FlowLiters: isO2 ? (Number(quickVitalO2Flow) || 0) : 0,
+      o2Device: isO2 ? quickVitalO2Mode : 'Air ambiant',
+      fio2: fio2Num,
       temperature: Number(quickVitalTemp) || 37.2,
+      weight: wNum,
+      height: hNum,
+      bmi: bmiObj,
       bloodGlucose: Number(quickVitalGlucose) || 1.05,
       painEva: 1,
       consciousnessGlasgow: 15,
       nurseName: currentUser?.name || 'Infirmier de garde',
-      notes: quickVitalNotes || `Surveillance régulière lit ${selectedHospForDetail.roomNumber}. Support O2 : ${quickVitalO2Mode} à ${quickVitalO2Flow} L/min.`
+      notes: quickVitalNotes || (
+        isO2
+          ? `Lit ${selectedHospForDetail.roomNumber} · Sous O2 (${quickVitalO2Flow} L/min via ${quickVitalO2Mode}${fio2Num ? `, FiO2 ${fio2Num}%` : ''})`
+          : `Lit ${selectedHospForDetail.roomNumber} · Air ambiant`
+      )
     };
 
     addNurseVitalRecord(newVital);
     setIsAddingVital(false);
     setQuickVitalNotes('');
-    setVoiceActionNotice(`✓ Constantes enregistrées pour ${selectedHospForDetail.patientName} (SpO2 ${newVital.spo2}%, TA ${newVital.bp}, FR ${newVital.rr}/min)`);
+    setVoiceActionNotice(`✓ Série de constantes enregistrée pour ${selectedHospForDetail.patientName} (SpO2 ${newVital.spo2}% ${isO2 ? 'sous O2' : 'AA'}, TA ${newVital.bp}, FR ${newVital.rr}/min)`);
     setTimeout(() => setVoiceActionNotice(null), 4000);
   };
 
@@ -585,39 +667,39 @@ export function Hospitalization() {
 
       {/* Visual Activity Counters Panel */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white border border-slate-100 p-4.5 rounded-2xl shadow-xs space-y-1.5 select-none">
+        <div className="bg-white border border-slate-200 p-4.5 rounded-2xl space-y-1.5 select-none">
           <span className="text-xxs font-extrabold text-slate-400 uppercase tracking-widest block">Patients Hospitalisés</span>
           <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-black text-slate-800">{activeHospitalizationsCount}</span>
-            <span className="text-[10px] text-teal-600 font-bold bg-teal-50 px-1.5 py-0.5 rounded">En observation</span>
+            <span className="text-2xl font-black text-slate-900 tabular-nums">{activeHospitalizationsCount}</span>
+            <span className="text-[11px] text-teal-700 font-semibold">En observation</span>
           </div>
         </div>
 
-        <div className="bg-white border border-slate-100 p-4.5 rounded-2xl shadow-xs space-y-1.5 select-none">
+        <div className="bg-white border border-slate-200 p-4.5 rounded-2xl space-y-1.5 select-none">
           <span className="text-xxs font-extrabold text-slate-400 uppercase tracking-widest block">Taux d'occupation</span>
           <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-black text-slate-800">
+            <span className="text-2xl font-black text-slate-900 tabular-nums">
               {totalBedsCount > 0 ? Math.round((occupiedBedsCount / totalBedsCount) * 100) : 0}%
             </span>
-            <span className="text-[10px] text-slate-400 font-bold bg-slate-100 px-1.5 py-0.5 rounded">
+            <span className="text-[11px] text-slate-500 font-semibold tabular-nums">
               {occupiedBedsCount} lits occupés
             </span>
           </div>
         </div>
 
-        <div className="bg-white border border-slate-100 p-4.5 rounded-2xl shadow-xs space-y-1.5 select-none">
+        <div className="bg-white border border-slate-200 p-4.5 rounded-2xl space-y-1.5 select-none">
           <span className="text-xxs font-extrabold text-slate-400 uppercase tracking-widest block">Lits Libres</span>
           <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-black text-teal-600">{availableBedsCount}</span>
-            <span className="text-[10px] text-emerald-600 font-bold bg-emerald-50 px-1.5 py-0.5 rounded">Immédiatement disponibles</span>
+            <span className="text-2xl font-black text-teal-600 tabular-nums">{availableBedsCount}</span>
+            <span className="text-[11px] text-emerald-700 font-semibold">Disponibles</span>
           </div>
         </div>
 
-        <div className="bg-white border border-slate-100 p-4.5 rounded-2xl shadow-xs space-y-1.5 select-none">
+        <div className="bg-white border border-slate-200 p-4.5 rounded-2xl space-y-1.5 select-none">
           <span className="text-xxs font-extrabold text-slate-400 uppercase tracking-widest block">Lits en Maintenance</span>
           <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-black text-amber-600">{maintenanceBedsCount}</span>
-            <span className="text-[10px] text-amber-500 font-bold bg-amber-50 px-1.5 py-0.5 rounded">Hors-service</span>
+            <span className="text-2xl font-black text-amber-600 tabular-nums">{maintenanceBedsCount}</span>
+            <span className="text-[11px] text-amber-700 font-semibold">Hors-service</span>
           </div>
         </div>
       </div>
@@ -749,9 +831,8 @@ export function Hospitalization() {
                             </h4>
                           </div>
 
-                          <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-teal-100 text-teal-900 border border-teal-300 flex items-center gap-1 shadow-2xs shrink-0">
-                            <span className="w-2 h-2 rounded-full bg-teal-600 animate-pulse"></span>
-                            <span>Occupé</span>
+                          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-teal-50 text-teal-800 border border-teal-200 shrink-0">
+                            Occupé
                           </span>
                         </div>
 
@@ -771,8 +852,8 @@ export function Hospitalization() {
                             </div>
                           </div>
 
-                          <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 pt-1 border-t border-slate-100">
-                            <span className="font-bold text-teal-800 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
+                          <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 pt-1 border-t border-slate-100 tabular-nums">
+                            <span className="font-bold text-teal-800">
                               J+{stayDays} d'hospitalisation
                             </span>
                             <span>Entrée : {currentStay.admissionDate}</span>
@@ -1267,6 +1348,12 @@ export function Hospitalization() {
               </div>
 
               <form onSubmit={handleAdmission} className="space-y-4">
+                {admitFormError && (
+                  <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>{admitFormError}</span>
+                  </div>
+                )}
                 <div className="space-y-1.5 relative">
                   <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block font-bold">Patient à hospitaliser *</label>
                   
@@ -1869,8 +1956,11 @@ export function Hospitalization() {
               {(() => {
                 const detailPatient = patients.find(p => p.id === selectedHospForDetail.patientId);
                 const detailBed = beds.find(b => b.id === selectedHospForDetail.bedId);
-                const detailVitals = nurseVitalRecords.filter(v => v.patientId === selectedHospForDetail.patientId || v.hospitalizationId === selectedHospForDetail.id);
-                const latestDetailVital = detailVitals.length > 0 ? detailVitals[detailVitals.length - 1] : null;
+                const detailVitals = nurseVitalRecords
+                  .filter(v => v.patientId === selectedHospForDetail.patientId || v.hospitalizationId === selectedHospForDetail.id)
+                  .slice()
+                  .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+                const latestDetailVital = detailVitals.length > 0 ? detailVitals[0] : null;
                 const detailTransmissions = nurseTargetedTransmissions.filter(t => t.patientId === selectedHospForDetail.patientId);
                 const stayDays = getDaysDifference(selectedHospForDetail.admissionDate, new Date().toISOString().split('T')[0]);
 
@@ -2049,7 +2139,9 @@ export function Hospitalization() {
                                   </span>
                                 </div>
                                 <span className="text-[9px] block mt-1 font-medium opacity-80 truncate">
-                                  O2: {latestDetailVital?.o2FlowLiters ? `${latestDetailVital.o2FlowLiters} L/min` : 'Air ambiant'}
+                                  {latestDetailVital?.spo2Mode === 'SOUS_O2' || (latestDetailVital?.o2FlowLiters && latestDetailVital.o2FlowLiters > 0)
+                                    ? `O2: ${latestDetailVital?.o2FlowLiters || 0} L/min (${latestDetailVital?.o2Device || 'Lunettes'})`
+                                    : 'Air ambiant'}
                                 </span>
                               </div>
 
@@ -2723,7 +2815,7 @@ export function Hospitalization() {
                                   </thead>
                                   <tbody className="divide-y divide-slate-100 text-xxs font-medium">
                                     {[...evolutionData].reverse().map((pt, i) => (
-                                      <tr key={pt.id || i} className="hover:bg-slate-50/80 transition">
+                                      <tr key={pt.id || i} className="hover:bg-slate-50/80 transition tabular-nums">
                                         <td className="p-2.5 font-mono font-bold text-slate-800 whitespace-nowrap">
                                           {pt.displayTime}
                                         </td>
@@ -2732,7 +2824,7 @@ export function Hospitalization() {
                                         </td>
                                         <td className="p-2.5 text-center">
                                           <span className={`px-2 py-0.5 rounded font-mono font-black ${
-                                            pt.spo2 < 90 ? 'bg-rose-100 text-rose-800 animate-pulse' : pt.spo2 < 94 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+                                            pt.spo2 < 90 ? 'bg-rose-100 text-rose-800' : pt.spo2 < 94 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
                                           }`}>
                                             {pt.spo2}%
                                           </span>
@@ -2800,123 +2892,200 @@ export function Hospitalization() {
                           </div>
 
                           {/* Quick Vital Entry Card */}
-                          {isAddingVital && (
-                            <div className="p-4 bg-teal-50/70 border border-teal-200 rounded-2xl space-y-3 animate-fade-in">
-                              <span className="text-[10px] font-black text-teal-900 uppercase tracking-wider block">
-                                Saisie Immédiate des Constantes au Lit du Patient
-                              </span>
-                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
-                                <div>
-                                  <label className="text-3xs font-bold text-slate-600 block mb-0.5">SpO2 (%) *</label>
-                                  <input
-                                    type="number"
-                                    min={50}
-                                    max={100}
-                                    value={quickVitalSpo2}
-                                    onChange={(e) => setQuickVitalSpo2(Number(e.target.value))}
-                                    className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
-                                  />
+                          {isAddingVital && (() => {
+                            const quickBmi = calcBmi(
+                              quickVitalWeight ? Number(quickVitalWeight) : undefined,
+                              quickVitalHeight ? Number(quickVitalHeight) : undefined
+                            );
+                            return (
+                              <div className="p-4 bg-teal-50/70 border border-teal-200 rounded-2xl space-y-3 animate-fade-in">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                  <span className="text-[10px] font-black text-teal-900 uppercase tracking-wider">
+                                    Saisie d'une Série de Constantes au Lit du Patient
+                                  </span>
+                                  <div className="inline-flex p-0.5 bg-white rounded-lg border border-slate-200">
+                                    <button
+                                      type="button"
+                                      onClick={() => setQuickVitalSpo2Mode('AIR_AMBIANT')}
+                                      className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition cursor-pointer ${
+                                        quickVitalSpo2Mode === 'AIR_AMBIANT'
+                                          ? 'bg-teal-600 text-white'
+                                          : 'text-slate-600 hover:text-slate-900'
+                                      }`}
+                                    >
+                                      SpO₂ à l'air ambiant
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setQuickVitalSpo2Mode('SOUS_O2')}
+                                      className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition cursor-pointer ${
+                                        quickVitalSpo2Mode === 'SOUS_O2'
+                                          ? 'bg-blue-600 text-white'
+                                          : 'text-slate-600 hover:text-slate-900'
+                                      }`}
+                                    >
+                                      SpO₂ sous oxygénothérapie
+                                    </button>
+                                  </div>
                                 </div>
-                                <div>
-                                  <label className="text-3xs font-bold text-slate-600 block mb-0.5">Débit O2 (L/min)</label>
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    max={15}
-                                    step={0.5}
-                                    value={quickVitalO2Flow}
-                                    onChange={(e) => setQuickVitalO2Flow(Number(e.target.value))}
-                                    className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-3xs font-bold text-slate-600 block mb-0.5">Pression Art. (TA)</label>
-                                  <input
-                                    type="text"
-                                    value={quickVitalBp}
-                                    onChange={(e) => setQuickVitalBp(e.target.value)}
-                                    placeholder="120/80"
-                                    className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-3xs font-bold text-slate-600 block mb-0.5">Pouls (bpm)</label>
-                                  <input
-                                    type="number"
-                                    min={30}
-                                    max={220}
-                                    value={quickVitalPulse}
-                                    onChange={(e) => setQuickVitalPulse(Number(e.target.value))}
-                                    className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-3xs font-bold text-slate-600 block mb-0.5">Fréq. Resp. (/min)</label>
-                                  <input
-                                    type="number"
-                                    min={8}
-                                    max={60}
-                                    value={quickVitalRr}
-                                    onChange={(e) => setQuickVitalRr(Number(e.target.value))}
-                                    className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-3xs font-bold text-slate-600 block mb-0.5">Température (°C)</label>
-                                  <input
-                                    type="number"
-                                    min={34}
-                                    max={43}
-                                    step={0.1}
-                                    value={quickVitalTemp}
-                                    onChange={(e) => setQuickVitalTemp(Number(e.target.value))}
-                                    className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
-                                  />
-                                </div>
-                                <div>
-                                  <label className="text-3xs font-bold text-slate-600 block mb-0.5">Mode Oxygénothérapie</label>
-                                  <select
-                                    value={quickVitalO2Mode}
-                                    onChange={(e) => setQuickVitalO2Mode(e.target.value)}
-                                    className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-medium"
-                                  >
-                                    <option value="Air ambiant">Air ambiant</option>
-                                    <option value="Lunettes nasales">Lunettes nasales</option>
-                                    <option value="Masque haute concentration">Masque HC</option>
-                                    <option value="VNI BiPAP / CPAP">VNI BiPAP / CPAP</option>
-                                    <option value="Optiflow / Haut débit">Optiflow</option>
-                                  </select>
-                                </div>
-                                <div>
-                                  <label className="text-3xs font-bold text-slate-600 block mb-0.5">Glycémie (g/L)</label>
-                                  <input
-                                    type="number"
-                                    step={0.05}
-                                    value={quickVitalGlucose}
-                                    onChange={(e) => setQuickVitalGlucose(Number(e.target.value))}
-                                    className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono"
-                                  />
-                                </div>
-                              </div>
 
-                              <div className="flex items-center gap-2 pt-1">
-                                <button
-                                  type="button"
-                                  onClick={handleSaveQuickVital}
-                                  className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-black transition cursor-pointer shadow-xs"
-                                >
-                                  Valider & Consigner les Constantes
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setIsAddingVital(false)}
-                                  className="px-3 py-2 border border-slate-200 text-slate-600 rounded-xl text-xs font-medium cursor-pointer"
-                                >
-                                  Annuler
-                                </button>
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                                  <div>
+                                    <label className="text-3xs font-bold text-slate-600 block mb-0.5">
+                                      {quickVitalSpo2Mode === 'SOUS_O2' ? 'SpO₂ sous O₂ (%) *' : 'SpO₂ Air Ambiant (%) *'}
+                                    </label>
+                                    <input
+                                      type="number"
+                                      min={50}
+                                      max={100}
+                                      value={quickVitalSpo2}
+                                      onChange={(e) => setQuickVitalSpo2(Number(e.target.value))}
+                                      className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono tabular-nums"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-3xs font-bold text-slate-600 block mb-0.5">Pression Art. (TA)</label>
+                                    <input
+                                      type="text"
+                                      value={quickVitalBp}
+                                      onChange={(e) => setQuickVitalBp(e.target.value)}
+                                      placeholder="120/80"
+                                      className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono tabular-nums"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-3xs font-bold text-slate-600 block mb-0.5">Pouls (bpm)</label>
+                                    <input
+                                      type="number"
+                                      min={30}
+                                      max={220}
+                                      value={quickVitalPulse}
+                                      onChange={(e) => setQuickVitalPulse(Number(e.target.value))}
+                                      className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono tabular-nums"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-3xs font-bold text-slate-600 block mb-0.5">Fréq. Resp. (/min)</label>
+                                    <input
+                                      type="number"
+                                      min={8}
+                                      max={60}
+                                      value={quickVitalRr}
+                                      onChange={(e) => setQuickVitalRr(Number(e.target.value))}
+                                      className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono tabular-nums"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-3xs font-bold text-slate-600 block mb-0.5">Température (°C)</label>
+                                    <input
+                                      type="number"
+                                      min={34}
+                                      max={43}
+                                      step={0.1}
+                                      value={quickVitalTemp}
+                                      onChange={(e) => setQuickVitalTemp(Number(e.target.value))}
+                                      className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono tabular-nums"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-3xs font-bold text-slate-600 block mb-0.5">Poids (kg)</label>
+                                    <input
+                                      type="number"
+                                      step={0.1}
+                                      placeholder="65"
+                                      value={quickVitalWeight}
+                                      onChange={(e) => setQuickVitalWeight(e.target.value)}
+                                      className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono tabular-nums"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-3xs font-bold text-slate-600 block mb-0.5">Taille (cm)</label>
+                                    <input
+                                      type="number"
+                                      placeholder="170"
+                                      value={quickVitalHeight}
+                                      onChange={(e) => setQuickVitalHeight(e.target.value)}
+                                      className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono tabular-nums"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="text-3xs font-bold text-slate-600 block mb-0.5">IMC / Glycémie</label>
+                                    <div className="flex items-center gap-1">
+                                      <span className="flex-1 p-2 bg-slate-100 border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-700 tabular-nums text-center">
+                                        {quickBmi ? `${quickBmi}` : 'IMC —'}
+                                      </span>
+                                      <input
+                                        type="number"
+                                        step={0.05}
+                                        title="Glycémie (g/L)"
+                                        value={quickVitalGlucose}
+                                        onChange={(e) => setQuickVitalGlucose(Number(e.target.value))}
+                                        className="w-16 p-2 bg-white border border-slate-200 rounded-lg text-xs font-bold font-mono tabular-nums"
+                                      />
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {quickVitalSpo2Mode === 'SOUS_O2' && (
+                                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 p-3 bg-blue-50/70 border border-blue-200 rounded-xl text-xs">
+                                    <div>
+                                      <label className="text-3xs font-bold text-blue-900 block mb-0.5">Débit O₂ (L/min) *</label>
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        max={60}
+                                        step={0.5}
+                                        value={quickVitalO2Flow}
+                                        onChange={(e) => setQuickVitalO2Flow(Number(e.target.value))}
+                                        className="w-full p-2 bg-white border border-blue-200 rounded-lg text-xs font-bold font-mono tabular-nums"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="text-3xs font-bold text-blue-900 block mb-0.5">Dispositif utilisé</label>
+                                      <select
+                                        value={quickVitalO2Mode}
+                                        onChange={(e) => setQuickVitalO2Mode(e.target.value)}
+                                        className="w-full p-2 bg-white border border-blue-200 rounded-lg text-xs font-medium"
+                                      >
+                                        {O2_DEVICE_OPTIONS.map(dev => (
+                                          <option key={dev} value={dev}>{dev}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                    <div>
+                                      <label className="text-3xs font-bold text-blue-900 block mb-0.5">FiO₂ (%) (optionnel)</label>
+                                      <input
+                                        type="number"
+                                        min={21}
+                                        max={100}
+                                        placeholder="Ex: 36"
+                                        value={quickVitalFio2}
+                                        onChange={(e) => setQuickVitalFio2(e.target.value)}
+                                        className="w-full p-2 bg-white border border-blue-200 rounded-lg text-xs font-bold font-mono tabular-nums"
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+
+                                <div className="flex items-center gap-2 pt-1">
+                                  <button
+                                    type="button"
+                                    onClick={handleSaveQuickVital}
+                                    className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-black transition cursor-pointer shadow-xs"
+                                  >
+                                    Valider & Consigner la Série
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setIsAddingVital(false)}
+                                    className="px-3 py-2 border border-slate-200 text-slate-600 rounded-xl text-xs font-medium cursor-pointer"
+                                  >
+                                    Annuler
+                                  </button>
+                                </div>
                               </div>
-                            </div>
-                          )}
+                            );
+                          })()}
 
                           {/* Historical Vitals Table */}
                           <div className="space-y-2">
@@ -2928,14 +3097,22 @@ export function Hospitalization() {
                               detailVitals.map((v, idx) => (
                                 <div key={v.id || idx} className="p-3 bg-white border border-slate-200 rounded-xl space-y-1.5 shadow-2xs">
                                   <div className="flex items-center justify-between text-3xs font-mono text-slate-500">
-                                    <span className="font-bold text-slate-700">{new Date(v.timestamp).toLocaleString('fr-FR')}</span>
+                                    <span className="font-bold text-slate-700 tabular-nums">{new Date(v.timestamp).toLocaleString('fr-FR')}</span>
                                     <span>Par : <strong>{v.nurseName}</strong></span>
                                   </div>
-                                  <div className="grid grid-cols-4 gap-2 text-xs font-bold text-slate-800">
-                                    <span className="text-teal-700">SpO2 : {v.spo2}%</span>
+                                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs font-bold text-slate-800 tabular-nums">
+                                    <span className="text-teal-700">
+                                      SpO₂ : {v.spo2}%{' '}
+                                      <span className="text-[10px] font-medium text-slate-500">
+                                        {v.spo2Mode === 'SOUS_O2' || (v.o2FlowLiters && v.o2FlowLiters > 0)
+                                          ? `(${v.o2FlowLiters || 0}L ${v.o2Device || 'O2'}${v.fio2 ? ` · FiO₂ ${v.fio2}%` : ''})`
+                                          : '(AA)'}
+                                      </span>
+                                    </span>
                                     <span>TA : {v.bp}</span>
                                     <span>Pouls : {v.pulse} bpm</span>
-                                    <span>Temp : {v.temperature}°C</span>
+                                    <span>FR : {v.rr}/min · T° : {v.temperature}°C</span>
+                                    <span>{v.bmi ? `IMC : ${v.bmi} kg/m²` : v.weight ? `Poids : ${v.weight} kg` : ''}</span>
                                   </div>
                                   {v.notes && (
                                     <p className="text-3xs text-slate-600 italic bg-slate-50 p-1.5 rounded">

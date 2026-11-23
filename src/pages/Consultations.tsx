@@ -76,8 +76,10 @@ import {
   ArrowDown,
   Upload,
   Paperclip,
-  ClipboardList
+  ClipboardList,
+  BedDouble
 } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
 
 // CIM-11 Catalog of frequent Pneumology & Infectious conditions in Senegal
 const CIM11_PNEUMO_CATALOG = [
@@ -850,9 +852,32 @@ export const Consultations: React.FC = () => {
     currentCenter
   } = useStore();
 
-  const [selectedPatientId, setSelectedPatientId] = useState<string>(patients[0]?.id || '');
+  const [searchParams] = useSearchParams();
+  const paramPatientId = searchParams.get('patientId');
+  const paramMode = searchParams.get('mode');
+
+  const [selectedPatientId, setSelectedPatientId] = useState<string>(() => {
+    if (paramPatientId && patients.some(p => p.id === paramPatientId)) {
+      return paramPatientId;
+    }
+    return patients[0]?.id || '';
+  });
   const [activeStepTab, setActiveStepTab] = useState<number>(1);
-  const [viewMode, setViewMode] = useState<'STEP_BY_STEP' | 'CONTINUOUS_SHEET' | 'EXPRESS_URGENCY'>('STEP_BY_STEP');
+  const [viewMode, setViewMode] = useState<'STEP_BY_STEP' | 'CONTINUOUS_SHEET' | 'EXPRESS_URGENCY'>(() =>
+    paramMode === 'urgency' ? 'EXPRESS_URGENCY' : 'STEP_BY_STEP'
+  );
+
+  useEffect(() => {
+    if (paramPatientId && patients.some(p => p.id === paramPatientId)) {
+      setSelectedPatientId(paramPatientId);
+    }
+  }, [paramPatientId, patients]);
+
+  useEffect(() => {
+    if (paramMode === 'urgency') {
+      setViewMode('EXPRESS_URGENCY');
+    }
+  }, [paramMode]);
   const [stepsOrientation, setStepsOrientation] = useState<'VERTICAL' | 'HORIZONTAL'>(() => {
     try {
       const saved = localStorage.getItem('chrein_steps_orientation');
@@ -1271,12 +1296,20 @@ export const Consultations: React.FC = () => {
         pulse: Number(v.pulse || 80),
         rr: Number(v.rr || 18),
         spo2: Number(v.spo2Mode === 'SOUS_O2' ? (v.spo2O2 || 96) : (v.spo2Ambient || 96)),
+        spo2Mode: v.spo2Mode || 'AIR_AMBIANT',
+        o2FlowLiters: v.spo2Mode === 'SOUS_O2' ? Number(v.o2FlowLiters || 0) : 0,
+        o2Device: v.spo2Mode === 'SOUS_O2' ? (v.o2Device || 'Lunettes nasales') : 'Air ambiant',
+        fio2: v.spo2Mode === 'SOUS_O2' ? v.fio2 : undefined,
         temperature: Number(v.temperature || 37),
+        weight: v.weight ? Number(v.weight) : undefined,
+        height: v.height ? Number(v.height) : undefined,
+        bmi: computedBmi,
+        generalState: v.generalState,
         consciousnessGlasgow: v.glasgowScore,
         painEva: v.painEva,
         nurseName: currentUser?.name || 'Praticien Consultation',
         notes: v.spo2Mode === 'SOUS_O2'
-          ? `Sous O2 (${v.o2FlowLiters || 0} L/min via ${v.o2Device || 'Lunettes nasales'})`
+          ? `Sous O2 (${v.o2FlowLiters || 0} L/min via ${v.o2Device || 'Lunettes nasales'}${v.fio2 ? `, FiO2 ${v.fio2}%` : ''})`
           : 'Air ambiant'
       });
     }
@@ -1471,12 +1504,22 @@ export const Consultations: React.FC = () => {
 
   const handleSaveConsultationRef = useRef<(() => void) | null>(null);
 
-  // Keyboard shortcut Ctrl+S or Cmd+S (bound once on mount)
+  // Keyboard shortcuts: Ctrl+S / Cmd+S to save, Alt+ArrowLeft / Alt+ArrowRight to change step
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         handleSaveConsultationRef.current?.();
+        return;
+      }
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          setActiveStepTab(prev => Math.min(12, prev + 1));
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          setActiveStepTab(prev => Math.max(1, prev - 1));
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -1568,6 +1611,8 @@ export const Consultations: React.FC = () => {
 
       const session = await startDictationSession({
         context: `Dictée médicale pour ${fieldLabels[targetField] || targetField}`,
+        fieldName: fieldLabels[targetField] || targetField,
+        requestId: `consultations-${targetField}`,
         onInterimText: (interim) => {
           setTranscriptNotice(`Dictée en cours : « ${interim} »`);
         },
@@ -1603,15 +1648,12 @@ export const Consultations: React.FC = () => {
 
       dictationSessionRef.current = session;
     } catch (err: any) {
-      console.warn('[Consultation Start Dictation Error]:', err);
+      console.warn('[Consultation Start Dictation Notice]:', err);
       setIsRecording(false);
       setDictationStatus('IDLE');
-      const errText = err?.message || "Accès au microphone refusé. Autorisez le micro via l'icône 🔒 dans la barre d'adresse du navigateur.";
+      const errText = err?.message || "Accès au microphone restreint. Utilisez la capture native OS ou autorisez le micro (🔒).";
       setTranscriptNotice(`⚠️ ${errText}`);
       setTimeout(() => setTranscriptNotice(null), 9000);
-      window.dispatchEvent(new CustomEvent('microphone-permission-denied', {
-        detail: { message: errText, fieldName: targetField }
-      }));
     }
   };
 
@@ -1623,9 +1665,59 @@ export const Consultations: React.FC = () => {
     }
   };
 
-  // Cleanup on unmount
+  // Listen to modal fallback insert/retry events for Consultations fields + cleanup on unmount
   useEffect(() => {
+    const handleInsertSample = (e: any) => {
+      const detail = e?.detail;
+      if (!detail?.text || typeof detail.requestId !== 'string' || !detail.requestId.startsWith('consultations-')) {
+        return;
+      }
+      const targetKey = detail.requestId.replace('consultations-', '');
+      const textToAdd = String(detail.text).trim();
+      if (!textToAdd) return;
+
+      if (targetKey === 'historyOfIllness') {
+        setForm12Steps(prev => ({
+          ...prev,
+          historyOfIllness: prev.historyOfIllness ? `${prev.historyOfIllness} ${textToAdd}` : textToAdd
+        }));
+      } else if (targetKey === 'chiefComplaint') {
+        setForm12Steps(prev => ({
+          ...prev,
+          chiefComplaint: prev.chiefComplaint ? `${prev.chiefComplaint} ${textToAdd}` : textToAdd
+        }));
+      } else if (targetKey === 'syndromicSummary') {
+        setForm12Steps(prev => ({
+          ...prev,
+          syndromicSummary: prev.syndromicSummary ? `${prev.syndromicSummary} ${textToAdd}` : textToAdd
+        }));
+      } else if (targetKey === 'medicationsPrescribed') {
+        setForm12Steps(prev => ({
+          ...prev,
+          managementPlan: {
+            ...prev.managementPlan,
+            medicationsPrescribed: prev.managementPlan.medicationsPrescribed
+              ? `${prev.managementPlan.medicationsPrescribed}\n${textToAdd}`
+              : textToAdd
+          }
+        }));
+      }
+      setTranscriptNotice(null);
+    };
+
+    const handleRetryMic = (e: any) => {
+      const reqId = e?.detail?.requestId;
+      if (typeof reqId === 'string' && reqId.startsWith('consultations-')) {
+        const targetKey = reqId.replace('consultations-', '');
+        startDictation(targetKey);
+      }
+    };
+
+    window.addEventListener('insert-dictation-sample', handleInsertSample);
+    window.addEventListener('retry-native-mic', handleRetryMic);
     return () => {
+      window.removeEventListener('insert-dictation-sample', handleInsertSample);
+      window.removeEventListener('retry-native-mic', handleRetryMic);
       if (dictationSessionRef.current) {
         dictationSessionRef.current.abort();
       }
@@ -1879,6 +1971,41 @@ export const Consultations: React.FC = () => {
           createdAt: new Date().toISOString()
         });
       }
+    }
+
+    // Sync consultation vitals with active hospitalization evolution curve if no series recorded yet
+    const activeHosp = hospitalizations.find(h => h.patientId === selectedPatient.id && h.status === 'active');
+    const v = form12Steps.vitals;
+    if (
+      activeHosp &&
+      (form12Steps.vitalsSeries?.length || 0) === 0 &&
+      (v.bp || v.pulse || v.spo2Ambient || v.spo2O2 || v.temperature)
+    ) {
+      const computedBmi = calcBmi(v.weight, v.height) ?? v.bmi;
+      addNurseVitalRecord({
+        id: `nv-cons-save-${Date.now()}`,
+        patientId: selectedPatient.id,
+        hospitalizationId: activeHosp.id,
+        centerId: currentCenter?.id || 'center-1',
+        timestamp: new Date().toISOString(),
+        bp: v.bp || '120/80',
+        pulse: Number(v.pulse || 80),
+        rr: Number(v.rr || 18),
+        spo2: Number(v.spo2Mode === 'SOUS_O2' ? (v.spo2O2 || 96) : (v.spo2Ambient || 96)),
+        spo2Mode: v.spo2Mode || 'AIR_AMBIANT',
+        o2FlowLiters: v.spo2Mode === 'SOUS_O2' ? Number(v.o2FlowLiters || 0) : 0,
+        o2Device: v.spo2Mode === 'SOUS_O2' ? (v.o2Device || 'Lunettes nasales') : 'Air ambiant',
+        fio2: v.spo2Mode === 'SOUS_O2' ? v.fio2 : undefined,
+        temperature: Number(v.temperature || 37),
+        weight: v.weight ? Number(v.weight) : undefined,
+        height: v.height ? Number(v.height) : undefined,
+        bmi: computedBmi,
+        generalState: v.generalState,
+        consciousnessGlasgow: v.glasgowScore,
+        painEva: v.painEva,
+        nurseName: currentUser?.name || 'Praticien Consultation',
+        notes: `Constantes de consultation${v.spo2Mode === 'SOUS_O2' ? ` — Sous O2 (${v.o2FlowLiters || 0} L/min via ${v.o2Device || 'Lunettes nasales'})` : ' — Air ambiant'}`
+      });
     }
 
     setSaveSuccessMsg(true);
@@ -2711,35 +2838,64 @@ export const Consultations: React.FC = () => {
                 <span className="text-slate-500">{selectedPatient?.address || 'Kaolack'}</span>
               </div>
 
-              {/* Real-time Allergies & Terrain Tags */}
-              <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xxs font-semibold">
+              {/* Real-time Allergies, Terrain & Direct Patient Workflow Shortcuts */}
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mt-2 text-xxs font-medium text-slate-600">
                 {selectedPatient?.allergies && selectedPatient.allergies.toLowerCase() !== 'aucune' && selectedPatient.allergies.toLowerCase() !== 'néant' ? (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-md">
-                    <AlertTriangle className="w-3 h-3 text-rose-600" />
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-md font-semibold">
+                    <AlertTriangle className="w-3 h-3 text-rose-600 shrink-0" />
                     <span>Allergie : <strong>{selectedPatient.allergies}</strong></span>
                   </span>
                 ) : (
-                  <span className="text-slate-500 bg-slate-50 border border-slate-200 px-2 py-0.5 rounded-md">
-                    Sans allergie connue
-                  </span>
+                  <span className="text-slate-500">Sans allergie connue</span>
                 )}
 
                 {selectedPatient?.chronicConditions && (
-                  <span className="bg-teal-50 border border-teal-200 text-teal-800 px-2 py-0.5 rounded-md">
-                    Terrain : <strong>{selectedPatient.chronicConditions}</strong>
-                  </span>
+                  <>
+                    <span className="text-slate-300" aria-hidden="true">·</span>
+                    <span className="text-teal-800">
+                      Terrain : <strong>{selectedPatient.chronicConditions}</strong>
+                    </span>
+                  </>
                 )}
 
                 {(form12Steps.riskFactors?.smokingPA || 0) > 0 && (
-                  <span className="bg-amber-50 border border-amber-200 text-amber-900 px-2 py-0.5 rounded-md">
-                    Tabagisme : <strong>{form12Steps.riskFactors.smokingPA} PA</strong>
-                  </span>
+                  <>
+                    <span className="text-slate-300" aria-hidden="true">·</span>
+                    <span className="text-amber-800 tabular-nums">
+                      Tabagisme : <strong>{form12Steps.riskFactors.smokingPA} PA</strong>
+                    </span>
+                  </>
                 )}
 
                 {form12Steps.riskFactors?.biomassExposure && (
-                  <span className="bg-orange-50 border border-orange-200 text-orange-900 px-2 py-0.5 rounded-md">
-                    Exposition biomasse
-                  </span>
+                  <>
+                    <span className="text-slate-300" aria-hidden="true">·</span>
+                    <span className="text-orange-800 font-semibold">Exposition biomasse</span>
+                  </>
+                )}
+
+                {selectedPatient && (
+                  <div className="flex items-center gap-2 sm:ml-2 pl-2 sm:border-l border-slate-200">
+                    <Link
+                      to={`/patients?patientId=${selectedPatient.id}`}
+                      className="text-xxs font-bold text-teal-700 hover:underline whitespace-nowrap"
+                    >
+                      Dossier DPI →
+                    </Link>
+                    <Link
+                      to={`/hospitalization?admit=1&patientId=${selectedPatient.id}`}
+                      className="inline-flex items-center gap-1 text-xxs font-bold text-sky-700 hover:underline whitespace-nowrap"
+                    >
+                      <BedDouble className="w-3 h-3" />
+                      <span>Hospitaliser</span>
+                    </Link>
+                    <Link
+                      to="/imaging-ai"
+                      className="text-xxs font-bold text-indigo-700 hover:underline whitespace-nowrap"
+                    >
+                      Radio IA
+                    </Link>
+                  </div>
                 )}
               </div>
             </div>
@@ -2793,24 +2949,24 @@ export const Consultations: React.FC = () => {
             </div>
 
             {/* Actions */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={() => setShowHistoryDrawer(!showHistoryDrawer)}
-                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0"
                 title="Consulter les consultations antérieures du patient"
               >
                 <History className="w-4 h-4 text-slate-500" />
                 <span className="hidden sm:inline">Historique</span>
-                <span className="bg-slate-200 text-slate-700 font-mono text-3xs px-1.5 py-0.2 rounded-full font-bold">
-                  {patientConsultations.length}
+                <span className="font-mono text-3xs font-bold text-slate-600 tabular-nums">
+                  ({patientConsultations.length})
                 </span>
               </button>
 
               <button
                 type="button"
                 onClick={() => setShowPrintModal(true)}
-                className="px-3 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer flex items-center gap-1.5"
+                className="px-3 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 font-bold text-xs rounded-xl transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0"
                 title="Imprimer le compte-rendu, ordonnance ou certificat"
               >
                 <Printer className="w-4 h-4 text-slate-500" />
@@ -2820,7 +2976,8 @@ export const Consultations: React.FC = () => {
               <button
                 type="button"
                 onClick={handleSaveConsultation}
-                className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white font-black text-xs rounded-xl shadow-xs transition cursor-pointer flex items-center gap-2 shrink-0"
+                title="Enregistrer la consultation (Ctrl+S)"
+                className="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white font-black text-xs rounded-xl shadow-xs transition cursor-pointer flex items-center gap-2 whitespace-nowrap shrink-0"
               >
                 <Save className="w-4 h-4" />
                 <span>Valider</span>
@@ -2954,17 +3111,21 @@ export const Consultations: React.FC = () => {
                   <div className="flex flex-wrap items-center gap-2">
                     <Mic className="w-4 h-4 text-teal-600 shrink-0" />
                     <span className="font-bold">{transcriptNotice}</span>
-                    {transcriptNotice && (transcriptNotice.includes('⚠️') || transcriptNotice.includes('refusé')) && (
+                    {transcriptNotice && (transcriptNotice.includes('⚠️') || transcriptNotice.includes('refusé') || transcriptNotice.includes('restreint')) && (
                       <button
                         type="button"
                         onClick={() => {
                           window.dispatchEvent(new CustomEvent('microphone-permission-denied', {
-                            detail: { message: transcriptNotice, fieldName: speechTargetField }
+                            detail: {
+                              message: transcriptNotice,
+                              fieldName: speechTargetField,
+                              requestId: `consultations-${speechTargetField}`
+                            }
                           }));
                         }}
                         className="ml-2 px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xxs font-black transition cursor-pointer shadow-2xs"
                       >
-                        Débloquer le micro / Modèles ➔
+                        Capture Native / Options ➔
                       </button>
                     )}
                   </div>
@@ -3228,7 +3389,7 @@ export const Consultations: React.FC = () => {
             {/* Express Emergency Triage Header */}
             <div className="flex items-center justify-between pb-3 border-b border-rose-200 bg-rose-50/70 -m-6 mb-0 p-6 rounded-t-2xl">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center font-bold shadow-xs animate-pulse">
+                <div className="w-10 h-10 rounded-xl bg-rose-600 text-white flex items-center justify-center font-bold shadow-xs">
                   <Zap className="w-5 h-5 fill-current" />
                 </div>
                 <div>
@@ -4945,10 +5106,23 @@ export const Consultations: React.FC = () => {
                     const isSpiro =
                       exam.macroCategory === 'EFR' ||
                       /spirom|efr/i.test(exam.examName);
+                    const computedGainMl =
+                      exam.spirometryData?.vemsPreL && exam.spirometryData?.vemsPostL
+                        ? Math.round((exam.spirometryData.vemsPostL - exam.spirometryData.vemsPreL) * 1000)
+                        : exam.spirometryData?.gainMl;
                     const vemsGain =
                       exam.spirometryData?.vemsPreL && exam.spirometryData?.vemsPostL
                         ? Number((((exam.spirometryData.vemsPostL - exam.spirometryData.vemsPreL) / exam.spirometryData.vemsPreL) * 100).toFixed(1))
-                        : exam.spirometryData?.reversibilityGainPct;
+                        : exam.spirometryData?.gainPct;
+
+                    const updateSpiroField = (patch: Partial<NonNullable<typeof exam.spirometryData>>) => {
+                      const nextSpiro = { ...exam.spirometryData, ...patch };
+                      if (nextSpiro.vemsPreL && nextSpiro.vemsPostL) {
+                        nextSpiro.gainMl = Math.round((nextSpiro.vemsPostL - nextSpiro.vemsPreL) * 1000);
+                        nextSpiro.gainPct = Number((((nextSpiro.vemsPostL - nextSpiro.vemsPreL) / nextSpiro.vemsPreL) * 100).toFixed(1));
+                      }
+                      handleUpdateDetailedExam(exam.id, { spirometryData: nextSpiro });
+                    };
 
                     return (
                       <div key={exam.id} className="p-3.5 bg-white rounded-xl border border-slate-200 space-y-2.5 shadow-2xs">
@@ -5016,30 +5190,29 @@ export const Consultations: React.FC = () => {
                           />
                         </div>
 
-                        {/* Structured Spirometry fields */}
+                        {/* Structured Spirometry fields aligned with SpirometryStructuredData */}
                         {isSpiro && (
                           <div className="p-2.5 bg-teal-50/50 rounded-lg border border-teal-200 space-y-2">
-                            <div className="flex items-center justify-between">
+                            <div className="flex items-center justify-between flex-wrap gap-1">
                               <span className="text-[10px] font-extrabold uppercase text-teal-900">
                                 Paramètres Spirométriques Structurés (Pré / Post-BD)
                               </span>
                               {vemsGain !== undefined && (
-                                <span className="text-[10px] font-bold bg-white px-2 py-0.5 rounded border border-teal-200 text-teal-800">
+                                <span className="text-[10px] font-bold bg-white px-2 py-0.5 rounded border border-teal-200 text-teal-800 tabular-nums">
                                   Réversibilité VEMS : {vemsGain > 0 ? `+${vemsGain}%` : `${vemsGain}%`}
+                                  {computedGainMl !== undefined ? ` (${computedGainMl > 0 ? `+${computedGainMl}` : computedGainMl} mL)` : ''}
                                 </span>
                               )}
                             </div>
-                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px]">
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
                               <div>
                                 <label className="text-[10px] text-slate-600 block">VEMS pré (L)</label>
                                 <input
                                   type="number"
                                   step="0.01"
                                   value={exam.spirometryData?.vemsPreL ?? ''}
-                                  onChange={(e) => handleUpdateDetailedExam(exam.id, {
-                                    spirometryData: { ...exam.spirometryData, vemsPreL: e.target.value === '' ? undefined : Number(e.target.value) }
-                                  })}
-                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono"
+                                  onChange={(e) => updateSpiroField({ vemsPreL: e.target.value === '' ? undefined : Number(e.target.value) })}
+                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono tabular-nums"
                                 />
                               </div>
                               <div>
@@ -5047,32 +5220,27 @@ export const Consultations: React.FC = () => {
                                 <input
                                   type="number"
                                   value={exam.spirometryData?.vemsPrePct ?? ''}
-                                  onChange={(e) => handleUpdateDetailedExam(exam.id, {
-                                    spirometryData: { ...exam.spirometryData, vemsPrePct: e.target.value === '' ? undefined : Number(e.target.value) }
-                                  })}
-                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono"
+                                  onChange={(e) => updateSpiroField({ vemsPrePct: e.target.value === '' ? undefined : Number(e.target.value) })}
+                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono tabular-nums"
                                 />
                               </div>
                               <div>
-                                <label className="text-[10px] text-slate-600 block">CVF pré (%)</label>
+                                <label className="text-[10px] text-slate-600 block">CVF pré (L)</label>
                                 <input
                                   type="number"
-                                  value={exam.spirometryData?.cvfPrePct ?? ''}
-                                  onChange={(e) => handleUpdateDetailedExam(exam.id, {
-                                    spirometryData: { ...exam.spirometryData, cvfPrePct: e.target.value === '' ? undefined : Number(e.target.value) }
-                                  })}
-                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono"
+                                  step="0.01"
+                                  value={exam.spirometryData?.cvfPreL ?? ''}
+                                  onChange={(e) => updateSpiroField({ cvfPreL: e.target.value === '' ? undefined : Number(e.target.value) })}
+                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono tabular-nums"
                                 />
                               </div>
                               <div>
-                                <label className="text-[10px] text-slate-600 block">VEMS/CVF (%)</label>
+                                <label className="text-[10px] text-slate-600 block">VEMS/CVF pré (%)</label>
                                 <input
                                   type="number"
-                                  value={exam.spirometryData?.vemsCvfPrePct ?? ''}
-                                  onChange={(e) => handleUpdateDetailedExam(exam.id, {
-                                    spirometryData: { ...exam.spirometryData, vemsCvfPrePct: e.target.value === '' ? undefined : Number(e.target.value) }
-                                  })}
-                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono"
+                                  value={exam.spirometryData?.tiffeneauPre ?? ''}
+                                  onChange={(e) => updateSpiroField({ tiffeneauPre: e.target.value === '' ? undefined : Number(e.target.value) })}
+                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono tabular-nums"
                                 />
                               </div>
                               <div>
@@ -5081,10 +5249,36 @@ export const Consultations: React.FC = () => {
                                   type="number"
                                   step="0.01"
                                   value={exam.spirometryData?.vemsPostL ?? ''}
-                                  onChange={(e) => handleUpdateDetailedExam(exam.id, {
-                                    spirometryData: { ...exam.spirometryData, vemsPostL: e.target.value === '' ? undefined : Number(e.target.value) }
-                                  })}
-                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono"
+                                  onChange={(e) => updateSpiroField({ vemsPostL: e.target.value === '' ? undefined : Number(e.target.value) })}
+                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono tabular-nums"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-slate-600 block">VEMS post-BD (%)</label>
+                                <input
+                                  type="number"
+                                  value={exam.spirometryData?.vemsPostPct ?? ''}
+                                  onChange={(e) => updateSpiroField({ vemsPostPct: e.target.value === '' ? undefined : Number(e.target.value) })}
+                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono tabular-nums"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-slate-600 block">CVF post-BD (L)</label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={exam.spirometryData?.cvfPostL ?? ''}
+                                  onChange={(e) => updateSpiroField({ cvfPostL: e.target.value === '' ? undefined : Number(e.target.value) })}
+                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono tabular-nums"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-slate-600 block">VEMS/CVF post (%)</label>
+                                <input
+                                  type="number"
+                                  value={exam.spirometryData?.tiffeneauPost ?? ''}
+                                  onChange={(e) => updateSpiroField({ tiffeneauPost: e.target.value === '' ? undefined : Number(e.target.value) })}
+                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono tabular-nums"
                                 />
                               </div>
                             </div>
@@ -5581,37 +5775,29 @@ export const Consultations: React.FC = () => {
                   type="button"
                   onClick={() => setActiveStepTab(prev => Math.max(1, prev - 1))}
                   disabled={activeStepTab === 1}
-                  className="px-3.5 sm:px-4 py-2 border border-slate-300 bg-white rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-30 cursor-pointer flex items-center gap-1.5 shadow-2xs transition"
+                  title="Étape précédente (Alt+←)"
+                  className="px-3.5 sm:px-4 py-2 border border-slate-300 bg-white rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-100 disabled:opacity-30 cursor-pointer flex items-center gap-1.5 shadow-2xs transition whitespace-nowrap"
                 >
                   <ChevronLeft className="w-4 h-4" />
                   <span>Précédent</span>
                 </button>
 
-                <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xxs font-mono text-slate-600">
+                <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xxs font-mono text-slate-600 tabular-nums">
                   <span className="font-black text-teal-800">Étape {activeStepTab}/12</span>
                   <span>•</span>
-                  <span className="text-slate-600 font-medium">
+                  <span className="text-slate-600 font-medium font-sans">
                     {CLINICAL_PHASES.find(p => p.steps.includes(activeStepTab))?.shortTitle}
                   </span>
                 </div>
               </div>
 
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAiDrawer(true)}
-                  className="px-3 py-2 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-xl text-xxs font-extrabold text-teal-800 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                  title="Ouvrir l'Assistant IA Médical CHREIN"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-teal-600" />
-                  <span className="hidden sm:inline">Assistance IA</span>
-                </button>
-
                 {activeStepTab < 12 ? (
                   <button
                     type="button"
                     onClick={() => setActiveStepTab(prev => Math.min(12, prev + 1))}
-                    className="px-4 sm:px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                    title="Étape suivante (Alt+→)"
+                    className="px-4 sm:px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer whitespace-nowrap"
                   >
                     <span>Étape suivante</span>
                     <ChevronRight className="w-4 h-4" />
@@ -5620,10 +5806,11 @@ export const Consultations: React.FC = () => {
                   <button
                     type="button"
                     onClick={handleSaveConsultation}
-                    className="px-4 sm:px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition flex items-center gap-2 shadow-xs cursor-pointer animate-pulse"
+                    title="Clôturer et enregistrer la consultation (Ctrl+S)"
+                    className="px-4 sm:px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition flex items-center gap-2 shadow-xs cursor-pointer whitespace-nowrap"
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>Valider la Consultation (12/12)</span>
+                    <span>Terminer &amp; Archiver (12/12)</span>
                   </button>
                 )}
               </div>
@@ -5636,24 +5823,15 @@ export const Consultations: React.FC = () => {
               >
                 ↑ Retour en haut (Étape 1)
               </a>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAiDrawer(true)}
-                  className="px-3.5 py-2 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-xl text-xxs font-extrabold text-teal-800 transition flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-teal-600" />
-                  <span>Assistance IA</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveConsultation}
-                  className="px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center gap-2 cursor-pointer"
-                >
-                  <Save className="w-4 h-4" />
-                  <span>Valider et Archiver la Fiche Complète (12 Étapes)</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={handleSaveConsultation}
+                title="Enregistrer la fiche complète (Ctrl+S)"
+                className="px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white font-black text-xs rounded-xl shadow-xs transition flex items-center gap-2 cursor-pointer whitespace-nowrap"
+              >
+                <Save className="w-4 h-4" />
+                <span>Valider et Archiver la Fiche Complète (12 Étapes)</span>
+              </button>
             </div>
           )}
         </div>
@@ -6162,41 +6340,90 @@ export const Consultations: React.FC = () => {
                   </div>
 
                   <div className="avoid-page-break p-3.5 bg-white border border-slate-200 rounded-xl space-y-1.5">
-                    <h4 className="font-black uppercase text-teal-900 text-xxs border-b pb-1">1. Motif de Consultation & Anamnèse</h4>
+                    <h4 className="font-black uppercase text-teal-900 text-xxs border-b pb-1">1. Motif de Consultation, Anamnèse & Antécédents DPI</h4>
                     <p className="leading-relaxed"><strong>Motif principal :</strong> {form12Steps.chiefComplaint || 'Non spécifié'}</p>
                     <p className="leading-relaxed text-slate-700"><strong>Histoire de la maladie :</strong> {form12Steps.historyOfIllness || 'Aucune précision complémentaire.'}</p>
                     {form12Steps.mmrcGrade !== undefined && (
                       <p className="text-xxs text-teal-900"><strong>Dyspnée mMRC :</strong> Stade {form12Steps.mmrcGrade}</p>
                     )}
-                    {form12Steps.antecedentsText && (
-                      <p className="text-xxs text-slate-700"><strong>Antécédents :</strong> {form12Steps.antecedentsText}</p>
-                    )}
+                    <div className="text-xxs text-slate-700 space-y-0.5 pt-1 border-t border-slate-100">
+                      <p>
+                        <strong>Tabagisme :</strong>{' '}
+                        {dpiAntecedentsValue.smokingStatus === 'JAMAIS'
+                          ? 'Jamais fumeur'
+                          : `${dpiAntecedentsValue.smokingStatus === 'ANCIEN' ? `Ancien fumeur (arrêt ${dpiAntecedentsValue.smokingStoppedYear || 'N/A'})` : 'Fumeur actuel'} — ${dpiAntecedentsValue.smokingPackYears || 0} PA`}
+                      </p>
+                      {(dpiAntecedentsValue.medicalAntecedents?.length > 0 || form12Steps.antecedentsText) && (
+                        <p>
+                          <strong>Antécédents médicaux :</strong>{' '}
+                          {dpiAntecedentsValue.medicalAntecedents?.length > 0
+                            ? [
+                                ...dpiAntecedentsValue.medicalAntecedents,
+                                dpiAntecedentsValue.medicalAntecedentsOther
+                              ].filter(Boolean).join(', ')
+                            : form12Steps.antecedentsText}
+                        </p>
+                      )}
+                      {(dpiAntecedentsValue.cannabis.status !== 'JAMAIS' || dpiAntecedentsValue.alcohol.status !== 'JAMAIS' || dpiAntecedentsValue.otherDrugs.status === 'OUI') && (
+                        <p>
+                          <strong>Autres consommations :</strong>{' '}
+                          Cannabis : {dpiAntecedentsValue.cannabis.status} · Alcool : {dpiAntecedentsValue.alcohol.status}
+                          {dpiAntecedentsValue.otherDrugs.status === 'OUI' ? ` · Autres substances : ${dpiAntecedentsValue.otherDrugs.substance || 'Oui'}` : ''}
+                        </p>
+                      )}
+                      {(dpiAntecedentsValue.occupationalProfile?.exposures?.length || 0) > 0 && (
+                        <p>
+                          <strong>Expositions pro/environnementales :</strong>{' '}
+                          {dpiAntecedentsValue.occupationalProfile.exposures.join(', ')}
+                          {dpiAntecedentsValue.occupationalProfile.durationYears ? ` (${dpiAntecedentsValue.occupationalProfile.durationYears} ans)` : ''}
+                        </p>
+                      )}
+                      {dpiAntecedentsValue.surgicalHistory.length > 0 && (
+                        <p>
+                          <strong>ATCD chirurgicaux :</strong>{' '}
+                          {dpiAntecedentsValue.surgicalHistory.map(s => `${s.procedure} (${s.dateOrYear})`).join(' ; ')}
+                        </p>
+                      )}
+                      {selectedPatient?.gender === 'F' && (dpiAntecedentsValue.obgynHistory.gestite !== undefined || dpiAntecedentsValue.obgynHistory.isPregnant) && (
+                        <p>
+                          <strong>Gynéco-obstétrique :</strong>{' '}
+                          G{dpiAntecedentsValue.obgynHistory.gestite ?? '-'} P{dpiAntecedentsValue.obgynHistory.parite ?? '-'}
+                          {dpiAntecedentsValue.obgynHistory.isPregnant ? ` · Grossesse (${dpiAntecedentsValue.obgynHistory.gestationalAgeWeeks || '?'} SA)` : ''}
+                          {dpiAntecedentsValue.obgynHistory.menopause ? ' · Ménopause' : ''}
+                        </p>
+                      )}
+                    </div>
                   </div>
 
                   <div className="avoid-page-break p-3.5 bg-white border border-slate-200 rounded-xl space-y-2">
                     <h4 className="font-black uppercase text-teal-900 text-xxs border-b pb-1">2. Constantes Vitales & Examen Physique</h4>
-                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 p-2 bg-slate-50 rounded-lg text-center font-mono text-xxs">
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 p-2 bg-slate-50 rounded-lg text-center font-mono text-xxs tabular-nums">
                       <div><span className="block text-slate-400 text-3xs">TA</span><strong>{form12Steps.vitals.bp || '--/--'}</strong></div>
                       <div><span className="block text-slate-400 text-3xs">FC</span><strong>{form12Steps.vitals.pulse || '--'} bpm</strong></div>
                       <div><span className="block text-slate-400 text-3xs">FR</span><strong>{form12Steps.vitals.rr || '--'}/min</strong></div>
                       <div>
-                        <span className="block text-slate-400 text-3xs">SpO2</span>
+                        <span className="block text-slate-400 text-3xs">SpO₂</span>
                         <strong>
                           {form12Steps.vitals.spo2Mode === 'SOUS_O2'
-                            ? `${form12Steps.vitals.spo2O2 || '--'}% (${form12Steps.vitals.o2FlowLiters || 0}L ${form12Steps.vitals.o2Device || 'O2'})`
+                            ? `${form12Steps.vitals.spo2O2 || '--'}% (${form12Steps.vitals.o2FlowLiters || 0}L ${form12Steps.vitals.o2Device || 'O2'}${form12Steps.vitals.fio2 ? ` FiO₂ ${form12Steps.vitals.fio2}%` : ''})`
                             : `${form12Steps.vitals.spo2Ambient || '--'}% (AA)`}
                         </strong>
                       </div>
                       <div><span className="block text-slate-400 text-3xs">T°</span><strong>{form12Steps.vitals.temperature || '--'}°C</strong></div>
-                      <div><span className="block text-slate-400 text-3xs">Poids / IMC</span><strong>{form12Steps.vitals.weight || '--'}kg {bmiCalculation ? `(${bmiCalculation.value})` : ''}</strong></div>
+                      <div><span className="block text-slate-400 text-3xs">Poids / Taille / IMC</span><strong>{form12Steps.vitals.weight || '--'}kg / {form12Steps.vitals.height || '--'}cm {bmiCalculation ? `(${bmiCalculation.value})` : ''}</strong></div>
                     </div>
                     <div className="space-y-1 text-slate-700 text-xxs leading-relaxed">
                       {form12Steps.systems.pulmonaryVesicularBreath && <p><strong>Murmure vésiculaire :</strong> {form12Steps.systems.pulmonaryVesicularBreath}</p>}
                       {form12Steps.systems.pulmonaryCrackles && <p><strong>Râles crépitants :</strong> {form12Steps.systems.pulmonaryCrackles}</p>}
                       {form12Steps.systems.pulmonaryWheezes && <p><strong>Sibilants :</strong> {form12Steps.systems.pulmonaryWheezes}</p>}
+                      {form12Steps.systems.pulmonaryRhonchi && <p><strong>Ronchis :</strong> {form12Steps.systems.pulmonaryRhonchi}</p>}
+                      {form12Steps.systems.pleuralFriction && <p><strong>Frottement pleural :</strong> {form12Steps.systems.pleuralFriction}</p>}
+                      {form12Steps.systems.cyanosisClubbing && <p><strong>Cyanose / Hippocratisme :</strong> {form12Steps.systems.cyanosisClubbing}</p>}
                       {form12Steps.systems.cardiovascular && <p><strong>Cardiovasculaire :</strong> {form12Steps.systems.cardiovascular}</p>}
                       {form12Steps.systems.abdomen && <p><strong>Abdomen :</strong> {form12Steps.systems.abdomen}</p>}
                       {form12Steps.systems.neurological && <p><strong>Neurologique :</strong> {form12Steps.systems.neurological}</p>}
+                      {form12Steps.systems.entLymphNodes && <p><strong>ORL & Ganglions :</strong> {form12Steps.systems.entLymphNodes}</p>}
+                      {form12Steps.systems.cutaneous && <p><strong>Cutané / Muqueuses :</strong> {form12Steps.systems.cutaneous}</p>}
                     </div>
                   </div>
 
@@ -6207,8 +6434,22 @@ export const Consultations: React.FC = () => {
                     </div>
                   )}
 
+                  {(form12Steps.paraclinicalOrdered.orderedExamsDetailed?.length || 0) > 0 && (
+                    <div className="avoid-page-break p-3.5 bg-white border border-slate-200 rounded-xl space-y-1.5">
+                      <h4 className="font-black uppercase text-teal-900 text-xxs border-b pb-1">4. Examens Paracliniques & Résultats</h4>
+                      <ul className="list-disc pl-4 space-y-1 text-slate-800">
+                        {form12Steps.paraclinicalOrdered.orderedExamsDetailed?.map(ex => (
+                          <li key={ex.id}>
+                            <strong>{ex.examName}</strong> ({ex.macroCategory} · {ex.status})
+                            {ex.resultsText ? ` : ${ex.resultsText}` : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
                   <div className="avoid-page-break p-3.5 bg-white border border-slate-200 rounded-xl space-y-1.5">
-                    <h4 className="font-black uppercase text-teal-900 text-xxs border-b pb-1">4. Diagnostics Retenus (CIM-11) & Scores</h4>
+                    <h4 className="font-black uppercase text-teal-900 text-xxs border-b pb-1">5. Diagnostics Retenus (CIM-11) & Scores</h4>
                     {form12Steps.diagnoses && form12Steps.diagnoses.length > 0 ? (
                       <ul className="list-disc pl-4 space-y-1 text-slate-800">
                         {form12Steps.diagnoses.map(d => (
@@ -6227,10 +6468,15 @@ export const Consultations: React.FC = () => {
                   </div>
 
                   <div className="avoid-page-break p-3.5 bg-white border border-slate-200 rounded-xl space-y-1.5">
-                    <h4 className="font-black uppercase text-teal-900 text-xxs border-b pb-1">5. Conduite Thérapeutique & Traitement</h4>
+                    <h4 className="font-black uppercase text-teal-900 text-xxs border-b pb-1">6. Conduite Thérapeutique & Suivi</h4>
                     <p className="font-sans whitespace-pre-line text-slate-900 text-xs leading-relaxed font-medium">
                       {form12Steps.managementPlan.medicationsPrescribed || 'Plan de soins en cours de stabilisation.'}
                     </p>
+                    {form12Steps.followUp.nextAppointmentDate && (
+                      <p className="text-xxs text-slate-700 pt-1 border-t border-slate-100">
+                        <strong>Orientation :</strong> {form12Steps.managementPlan.orientation} · <strong>Prochain suivi :</strong> {new Date(form12Steps.followUp.nextAppointmentDate).toLocaleDateString('fr-FR')}
+                      </p>
+                    )}
                   </div>
                 </div>
               )}

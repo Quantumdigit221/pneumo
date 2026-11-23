@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Mic, MicOff, Square, Loader2, Check, X, Volume2, AlertCircle } from 'lucide-react';
-import { startDictationSession, DictationSession } from '../utils/audioRecorder';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Mic, Square, Loader2, X, Volume2, AlertCircle, Upload } from 'lucide-react';
+import { startDictationSession, transcribeAudioBlob, DictationSession } from '../utils/audioRecorder';
 
 export interface VoiceDictationButtonProps {
   value: string;
@@ -67,22 +67,26 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
 
   const sessionRef = useRef<DictationSession | null>(null);
   const timerRef = useRef<any>(null);
+  const nativeFileInputRef = useRef<HTMLInputElement>(null);
+  const requestIdRef = useRef<string>(`vdb-${Math.random().toString(36).slice(2, 10)}`);
   const currentValueRef = useRef<string>(value);
   currentValueRef.current = value;
+  const onTranscriptRef = useRef(onTranscript);
+  onTranscriptRef.current = onTranscript;
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (sessionRef.current) {
-        try {
-          sessionRef.current.abort();
-        } catch {}
-      }
-    };
-  }, []);
+  const commitFormattedText = useCallback((rawText: string) => {
+    const formatted = formatClinicalFrench(rawText);
+    if (!formatted || formatted.length === 0) return;
 
-  const handleStart = async (e?: React.MouseEvent) => {
+    if (appendMode && currentValueRef.current && currentValueRef.current.trim().length > 0) {
+      const separator = currentValueRef.current.endsWith('\n') ? '' : ' ';
+      onTranscriptRef.current(`${currentValueRef.current}${separator}${formatted}`);
+    } else {
+      onTranscriptRef.current(formatted);
+    }
+  }, [appendMode]);
+
+  const handleStart = useCallback(async (e?: React.MouseEvent) => {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
@@ -94,6 +98,8 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
     try {
       const session = await startDictationSession({
         context: `Dictée médicale pneumologie pour ${fieldName}`,
+        fieldName,
+        requestId: requestIdRef.current,
         onInterimText: (text) => {
           setInterimText(text);
         },
@@ -113,18 +119,53 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
         },
         onError: (err) => {
           setErrorMessage(err);
-          setTimeout(() => setErrorMessage(null), 5000);
         }
       });
 
       sessionRef.current = session;
     } catch (err: any) {
-      console.warn('Voice Dictation start error:', err);
+      console.warn('Voice Dictation start notice:', err);
       setStatus('IDLE');
-      setErrorMessage(err?.message || "Accès micro refusé. Autorisez le micro (cadenas 🔒).");
-      setTimeout(() => setErrorMessage(null), 7000);
+      setErrorMessage(err?.message || "Accès micro restreint. Utilisez la capture native OS.");
     }
-  };
+  }, [fieldName]);
+
+  // Listen to modal fallback insertions (Native OS recording, Win+H / Fn x2 dictation, or preset) and retry triggers
+  useEffect(() => {
+    const handleInsertSample = (e: any) => {
+      const detail = e?.detail;
+      if (!detail?.text) return;
+      if (detail.requestId === requestIdRef.current) {
+        commitFormattedText(detail.text);
+        setErrorMessage(null);
+      }
+    };
+
+    const handleRetryMic = (e: any) => {
+      if (e?.detail?.requestId === requestIdRef.current) {
+        handleStart();
+      }
+    };
+
+    window.addEventListener('insert-dictation-sample', handleInsertSample);
+    window.addEventListener('retry-native-mic', handleRetryMic);
+    return () => {
+      window.removeEventListener('insert-dictation-sample', handleInsertSample);
+      window.removeEventListener('retry-native-mic', handleRetryMic);
+    };
+  }, [commitFormattedText, handleStart]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (sessionRef.current) {
+        try {
+          sessionRef.current.abort();
+        } catch {}
+      }
+    };
+  }, []);
 
   const handleStopAndCommit = async (e?: React.MouseEvent) => {
     if (e) {
@@ -143,16 +184,7 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
       try {
         setStatus('TRANSCRIBING');
         const rawTranscript = await activeSession.stop();
-        const formatted = formatClinicalFrench(rawTranscript);
-
-        if (formatted && formatted.length > 0) {
-          if (appendMode && currentValueRef.current && currentValueRef.current.trim().length > 0) {
-            const separator = currentValueRef.current.endsWith('\n') ? '' : currentValueRef.current.endsWith('.') ? ' ' : ' ';
-            onTranscript(`${currentValueRef.current}${separator}${formatted}`);
-          } else {
-            onTranscript(formatted);
-          }
-        }
+        commitFormattedText(rawTranscript);
       } catch (err) {
         console.error('Stop dictation error:', err);
       } finally {
@@ -185,6 +217,31 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
     setSeconds(0);
   };
 
+  const handleNativeFileCapture = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setErrorMessage(null);
+    setStatus('TRANSCRIBING');
+    try {
+      const rawTranscript = await transcribeAudioBlob(
+        file,
+        file.type || 'audio/mp4',
+        `Dictée médicale native OS pour ${fieldName}`
+      );
+      if (rawTranscript) {
+        commitFormattedText(rawTranscript);
+      } else {
+        setErrorMessage("Aucune parole audible détectée.");
+      }
+    } catch (err: any) {
+      setErrorMessage(err?.message || "Erreur lors de la transcription audio.");
+    } finally {
+      setStatus('IDLE');
+    }
+  };
+
   const formatTimer = (s: number) => {
     const mins = Math.floor(s / 60);
     const secs = s % 60;
@@ -206,42 +263,46 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
 
   return (
     <div className={`inline-flex flex-col items-start gap-1 ${className}`}>
+      <input
+        ref={nativeFileInputRef}
+        type="file"
+        accept="audio/*"
+        capture="microphone"
+        onChange={handleNativeFileCapture}
+        className="hidden"
+      />
+
       {/* Active State / Trigger Button */}
       {status === 'IDLE' && (
         <button
           type="button"
           onClick={handleStart}
-          title={`Dicter à la voix dans ${fieldName} (gain de temps)`}
+          title={`Dicter à la voix dans ${fieldName}`}
           className={`inline-flex items-center font-bold rounded-lg border border-teal-300 bg-teal-50/80 hover:bg-teal-100/90 text-teal-800 hover:text-teal-900 transition-all cursor-pointer shadow-2xs group ${sizeClasses}`}
         >
           <Mic className={`${iconSizes} text-teal-600 group-hover:scale-110 transition-transform`} />
           <span>{buttonText}</span>
           <span className="hidden sm:inline text-[9px] text-teal-600/80 font-normal">
-            (Poncez & dictez)
+            (Parlez &amp; dictez)
           </span>
         </button>
       )}
 
       {status === 'REQUESTING_MIC' && (
-        <div className={`inline-flex items-center font-bold rounded-lg border border-amber-300 bg-amber-50 text-amber-800 ${sizeClasses} animate-pulse`}>
+        <div className={`inline-flex items-center font-bold rounded-lg border border-amber-300 bg-amber-50 text-amber-800 ${sizeClasses}`}>
           <Loader2 className={`${iconSizes} animate-spin text-amber-600`} />
-          <span>Connexion micro...</span>
+          <span>Activation micro...</span>
         </div>
       )}
 
       {status === 'RECORDING' && (
         <div className="inline-flex items-center gap-1.5 p-1 bg-rose-50 border border-rose-300 rounded-xl shadow-xs animate-fade-in">
-          {/* Pulsing indicator & timer */}
           <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-white border border-rose-200">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-600"></span>
-            </span>
-            <span className="text-[10px] font-black text-rose-800 font-mono">
+            <span className="inline-flex rounded-full h-2 w-2 bg-rose-600"></span>
+            <span className="text-[10px] font-black text-rose-800 font-mono tabular-nums">
               {formatTimer(seconds)}
             </span>
 
-            {/* Audio wave bars */}
             <div className="flex items-center gap-0.5 h-3">
               <span className="w-0.5 bg-rose-500 rounded-full animate-bounce [animation-delay:-0.3s] h-3"></span>
               <span className="w-0.5 bg-rose-500 rounded-full animate-bounce [animation-delay:-0.15s] h-2"></span>
@@ -250,7 +311,6 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
             </div>
           </div>
 
-          {/* Commit button */}
           <button
             type="button"
             onClick={handleStopAndCommit}
@@ -261,7 +321,6 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
             <span>Insérer</span>
           </button>
 
-          {/* Cancel button */}
           <button
             type="button"
             onClick={handleCancel}
@@ -276,11 +335,11 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
       {status === 'TRANSCRIBING' && (
         <div className={`inline-flex items-center font-bold rounded-lg border border-teal-300 bg-teal-50 text-teal-800 ${sizeClasses}`}>
           <Loader2 className={`${iconSizes} animate-spin text-teal-600`} />
-          <span>Formatage clinique...</span>
+          <span>Transcription clinique...</span>
         </div>
       )}
 
-      {/* Live Interim Transcript or Error pill */}
+      {/* Live Interim Transcript */}
       {status === 'RECORDING' && interimText && showStatusBanner && (
         <div className="max-w-md bg-white border border-rose-200 rounded-lg p-1.5 text-[10px] text-slate-700 font-medium shadow-xs italic flex items-center gap-1.5 animate-fade-in">
           <Volume2 className="w-3 h-3 text-rose-500 shrink-0" />
@@ -288,24 +347,44 @@ export const VoiceDictationButton: React.FC<VoiceDictationButtonProps> = ({
         </div>
       )}
 
-      {errorMessage && (
-        <button
-          type="button"
-          onClick={() => {
-            window.dispatchEvent(new CustomEvent('microphone-permission-denied', {
-              detail: { message: errorMessage, fieldName }
-            }));
-          }}
-          title="Cliquez pour afficher les instructions de déblocage du micro"
-          className="text-[10px] font-bold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2 py-0.5 rounded-md flex items-center gap-1.5 animate-fade-in transition cursor-pointer"
-        >
+      {/* Inline Native OS Fallback Bar when browser blocks live mic */}
+      {errorMessage && status === 'IDLE' && (
+        <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-bold text-rose-800 bg-rose-50 border border-rose-200 px-2 py-1 rounded-lg animate-fade-in">
           <AlertCircle className="w-3 h-3 shrink-0 text-rose-600" />
-          <span>{errorMessage}</span>
-          <span className="underline text-[9px] text-rose-800">Débloquer / Exemples</span>
-        </button>
+          <span className="max-w-xs truncate">{errorMessage}</span>
+          <button
+            type="button"
+            onClick={() => nativeFileInputRef.current?.click()}
+            className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-teal-700 hover:bg-teal-800 text-white rounded text-[9px] font-black transition cursor-pointer"
+            title="Ouvrir l'enregistreur micro natif du système (contourne le blocage navigateur)"
+          >
+            <Upload className="w-2.5 h-2.5" />
+            <span>Micro natif OS</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent('microphone-permission-denied', {
+                detail: { message: errorMessage, fieldName, requestId: requestIdRef.current }
+              }));
+            }}
+            className="underline text-[9px] text-rose-900 hover:text-rose-700 cursor-pointer"
+          >
+            Options / Win+H
+          </button>
+          <button
+            type="button"
+            onClick={() => setErrorMessage(null)}
+            className="text-rose-400 hover:text-rose-700 cursor-pointer"
+            aria-label="Fermer"
+          >
+            <X className="w-3 h-3" />
+          </button>
+        </div>
       )}
     </div>
   );
 };
 
 export default VoiceDictationButton;
+

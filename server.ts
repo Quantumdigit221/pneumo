@@ -25,8 +25,9 @@ async function startServer() {
   // Compression middleware to drastically reduce API transfer payload sizes (e.g. 1MB json -> ~100KB)
   app.use(compression());
 
-  // Browser HTTP cache acceleration ONLY for hashed production assets (never in Vite dev mode)
+  // Explicitly allow microphone hardware delegation (including embedded iframes / WebViews)
   app.use((req, res, next) => {
+    res.setHeader('Permissions-Policy', 'microphone=*');
     if (process.env.NODE_ENV === 'production' && req.url.startsWith('/assets/')) {
       res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     } else if (process.env.NODE_ENV !== 'production' && req.url.includes('/node_modules/.vite/')) {
@@ -1244,53 +1245,82 @@ Réponds STRICTEMENT avec un JSON valide :
     }
   });
 
-  // Medical Speech-to-Text Audio Transcription via Gemini 2.5 Flash
+  // Medical Speech-to-Text Audio Transcription via Gemini Flash (supports WebM, MP4, M4A, OGG, WAV)
   app.post('/api/voice-transcribe', async (req, res) => {
     try {
       const { audioData, mimeType, context } = req.body;
-      if (!audioData) {
+      if (!audioData || typeof audioData !== 'string') {
         return res.status(400).json({ error: "Données audio manquantes." });
       }
 
       const client = getGeminiClient();
       if (!client) {
         return res.json({
-          text: "Observation clinique enregistrée (mode hors-ligne actif).",
-          offline: true
+          text: "",
+          offline: true,
+          error: "Service de transcription cloud non configuré."
         });
       }
 
-      // Clean base64 data if it contains data prefix
-      const cleanBase64 = audioData.includes('base64,')
-        ? audioData.split('base64,')[1]
-        : audioData;
+      // Clean base64 data if it contains data: prefix and normalize MIME type (strip ;codecs=...)
+      const dataUrlMatch = audioData.match(/^data:([^;]+)(?:;[^,]*)?;base64,(.*)$/);
+      const rawMime = dataUrlMatch?.[1] || mimeType || 'audio/webm';
+      let cleanMime = rawMime.split(';')[0].trim().toLowerCase();
+      if (cleanMime === 'audio/x-wav' || cleanMime === 'audio/wave') cleanMime = 'audio/wav';
+      if (cleanMime === 'audio/x-m4a' || cleanMime === 'audio/m4a') cleanMime = 'audio/mp4';
+      if (!cleanMime.startsWith('audio/')) cleanMime = 'audio/webm';
 
-      const prompt = `Tu es un transcripteur médical spécialisé en pneumologie et infectiologie au Sénégal (CHREIN Kaolack).
+      const cleanBase64 = dataUrlMatch
+        ? dataUrlMatch[2]
+        : (audioData.includes('base64,') ? audioData.split('base64,')[1] : audioData);
+
+      const prompt = `Tu es un transcripteur médical spécialisé en pneumologie et infectiologie au Centre Hospitalier Régional El Hadji Ibrahima Niass (CHREIN) à Kaolack, Sénégal.
 Transcris fidèlement cette dictée vocale enregistrée par le praticien.
 Contexte clinique : ${context || 'Observation médicale de pneumologie'}.
 Règles strictes :
 - Transcris en français médical exact mot pour mot.
-- Corrige l'orthographe des termes médicaux (ex: GeneXpert MTB/RIF, Auscultation, Râles crépitants, Sibilants, Rhonchi, 2RHZE, BPCO, Dyspnée, etc.).
+- Corrige l'orthographe des termes médicaux (ex: GeneXpert MTB/RIF, Auscultation, Râles crépitants, Sibilants, Rhonchi, 2RHZE, BPCO, Dyspnée stade mMRC, SpO2, pyrazinamide, rifampicine).
+- Si le praticien dicte oralement la ponctuation ("virgule", "point", "à la ligne", "deux points"), convertis-les directement en ponctuation écrite.
+- S'il n'y a aucune parole audible dans l'audio, retourne exactement une chaîne vide.
 - Renvoie STRICTEMENT le texte transcrit brut, sans introduction, sans guillemets, sans politesses, sans aucun préambule.`;
 
-      const response = await client.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: [
-          {
-            inlineData: {
-              mimeType: mimeType || 'audio/webm',
-              data: cleanBase64
-            }
-          },
-          { text: prompt }
-        ]
-      });
+      let transcribedText = '';
+      for (const modelName of ['gemini-2.5-flash', 'gemini-2.5-flash-lite']) {
+        try {
+          const genPromise = client.models.generateContent({
+            model: modelName,
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: cleanMime,
+                      data: cleanBase64
+                    }
+                  },
+                  { text: prompt }
+                ]
+              }
+            ]
+          });
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Délai de transcription dépassé (18s)')), 18000)
+          );
+          const response: any = await Promise.race([genPromise, timeoutPromise]);
+          if (typeof response?.text === 'string') {
+            transcribedText = response.text.trim();
+            break;
+          }
+        } catch (modelErr: any) {
+          console.warn(`[Voice Transcribe] Model ${modelName} notice:`, modelErr?.message || modelErr);
+        }
+      }
 
-      const text = response?.text?.trim() || '';
-      return res.json({ text, success: true });
+      return res.json({ text: transcribedText, success: true });
     } catch (err: any) {
       console.error('[Voice Transcribe Error]:', err);
-      return res.status(500).json({ error: "Échec de la transcription audio.", details: err?.message });
+      return res.status(500).json({ success: false, error: "Échec de la transcription audio.", details: err?.message });
     }
   });
 
@@ -2095,58 +2125,7 @@ Règles strictes :
     res.json({ success: true, count: patientExps.length, data: patientExps });
   });
 
-  // --- 13. POST /api/voice-transcribe : Transcription audio médicale par IA (Gemini 2.5 Flash)
-  app.post('/api/voice-transcribe', async (req, res) => {
-    try {
-      const { audioData, mimeType, context } = req.body;
-      if (!audioData) {
-        return res.status(400).json({ error: "Données audio manquantes" });
-      }
-
-      const client = getGeminiClient();
-      if (!client) {
-        return res.status(503).json({ error: "Service IA non configuré" });
-      }
-
-      const cleanBase64 = audioData.includes(',') ? audioData.split(',')[1] : audioData;
-      const cleanMime = mimeType || 'audio/webm';
-
-      const prompt = `Tu es le transcripteur médical spécialisé en pneumologie et infectiologie du Centre Hospitalier Régional El Hadji Ibrahima Niass (CHREIN) à Kaolack, Sénégal.
-Transcris fidèlement ce message audio dicté par un médecin.
-Contexte clinique : ${context || 'Observation médicale en pneumologie'}.
-
-Règles de transcription :
-1. Respecte rigoureusement la terminologie médicale française (ex: râles crépitants, sibilants, BPCO, dyspnée stade mMRC, auscultation, GeneXpert, pyrazinamide, rifampicine, expectorations).
-2. Si le médecin dicte la ponctuation (ex: "virgule", "point", "à la ligne", "deux points", "point d'interrogation"), convertis ces commandes orales en véritable ponctuation écrite.
-3. Retourne UNIQUEMENT le texte médical transcrit et mis en forme, sans aucun préambule ni commentaire.`;
-
-      const response = await client.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                inlineData: {
-                  mimeType: cleanMime,
-                  data: cleanBase64
-                }
-              },
-              {
-                text: prompt
-              }
-            ]
-          }
-        ]
-      });
-
-      const text = response?.text?.trim() || '';
-      res.json({ success: true, text });
-    } catch (err: any) {
-      console.error('[Voice Transcribe Error]:', err);
-      res.status(500).json({ success: false, error: err.message || 'Erreur transcription' });
-    }
-  });
+  // Route /api/voice-transcribe unifiée plus haut (ligne ~1248)
 
   // --- 14. POST /api/voice-format : Formatage et ponctuation médicale de dictée
   app.post('/api/voice-format', (req, res) => {

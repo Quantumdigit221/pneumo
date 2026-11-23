@@ -17,6 +17,7 @@ export const Users: React.FC = () => {
   const [specialty, setSpecialty] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
   const [revealPasswordList, setRevealPasswordList] = useState<Record<string, boolean>>({});
 
   const toggleRevealPassword = (userId: string) => {
@@ -59,10 +60,11 @@ export const Users: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !email) {
-      alert('Veuillez renseigner tous les champs obligatoires.');
+    if (!name.trim() || !email.trim()) {
+      setFormError('Veuillez renseigner le nom et l\'adresse email obligatoires.');
       return;
     }
+    setFormError(null);
 
     if (editingUser) {
       await updateUser(editingUser.id, {
@@ -127,6 +129,11 @@ export const Users: React.FC = () => {
           <h3 className="text-sm font-bold text-teal-800 uppercase tracking-wider">
             {editingUser ? `Modifier le Compte de ${editingUser.name}` : "Ajouter un Professionnel de Santé"}
           </h3>
+          {formError && (
+            <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-xs font-semibold text-rose-800">
+              {formError}
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="flex flex-col gap-1">
               <label className="text-xs font-bold text-slate-500">Nom Complet *</label>

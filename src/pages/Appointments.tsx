@@ -15,15 +15,17 @@ export const Appointments: React.FC = () => {
   const [appointmentDate, setAppointmentDate] = useState('');
   const [appointmentTime, setAppointmentTime] = useState('');
   const [reason, setReason] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
 
   const doctors = users.filter(u => u.role === 'DOCTOR');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!patientName || !patientPhone || !appointmentDate || !appointmentTime) {
-      alert('Veuillez remplir les informations obligatoires.');
+    if (!patientName.trim() || !patientPhone.trim() || !appointmentDate || !appointmentTime) {
+      setFormError('Veuillez renseigner le patient, le téléphone, la date et l\'heure du rendez-vous.');
       return;
     }
+    setFormError(null);
 
     await createAppointment({
       patientId: patientId || undefined,
@@ -54,7 +56,10 @@ export const Appointments: React.FC = () => {
           <p className="text-xs text-slate-400">Service de Pneumologie et Maladies Infectieuses • CHREIN Kaolack — Suivis Tuberculose, BPCO, Asthme et bilans EFR</p>
         </div>
         <button
-          onClick={() => setShowForm(!showForm)}
+          onClick={() => {
+            setFormError(null);
+            setShowForm(!showForm);
+          }}
           className="flex items-center gap-1.5 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-sm font-semibold transition-all cursor-pointer shadow-sm"
         >
           <Plus className="w-4 h-4" />
@@ -67,6 +72,11 @@ export const Appointments: React.FC = () => {
           <h3 className="text-sm font-bold text-teal-800 uppercase tracking-wider mb-4">
             Planifier un suivi ou une consultation spécialisée
           </h3>
+          {formError && (
+            <div className="mb-3 p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-xs font-semibold text-rose-800">
+              {formError}
+            </div>
+          )}
           <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* Quick Patient Select */}
             <div className="flex flex-col gap-1">

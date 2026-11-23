@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../store';
 import { EducationLevel, MaritalStatus, Patient, SpecializedPneumoRecord } from '../types';
 import {
@@ -27,9 +27,10 @@ import {
   Edit3,
   Trash2,
   Microscope,
-  Pill
+  Pill,
+  BedDouble
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { SpecializedSheetModal, SPECIALIZED_FORM_CONFIGS } from '../components/SpecializedSheetModal';
 import {
   PatientDpiHistoryEditor,
@@ -56,11 +57,35 @@ export const Patients: React.FC = () => {
     findDuplicatePatients
   } = useStore();
 
+  const [searchParams, setSearchParams] = useSearchParams();
+  const paramPatientId = searchParams.get('patientId');
+  const paramNew = searchParams.get('new');
+
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedPatientId, setSelectedPatientId] = useState<string | null>(patients[0]?.id || null);
+  const [selectedPatientId, setSelectedPatientId] = useState<string | null>(() => {
+    if (paramPatientId && patients.some(p => p.id === paramPatientId)) {
+      return paramPatientId;
+    }
+    return patients[0]?.id || null;
+  });
   const [activeTab, setActiveTab] = useState<'info' | 'consultations' | 'hospitalizations' | 'specialized' | 'scores' | 'explorations' | 'documents'>('info');
-  const [showNewPatientModal, setShowNewPatientModal] = useState(false);
+  const [showNewPatientModal, setShowNewPatientModal] = useState(() => paramNew === '1');
   const [showEditPatientModal, setShowEditPatientModal] = useState(false);
+
+  useEffect(() => {
+    if (paramPatientId && patients.some(p => p.id === paramPatientId)) {
+      setSelectedPatientId(paramPatientId);
+    }
+  }, [paramPatientId, patients]);
+
+  useEffect(() => {
+    if (paramNew === '1') {
+      setShowNewPatientModal(true);
+      const next = new URLSearchParams(searchParams);
+      next.delete('new');
+      setSearchParams(next, { replace: true });
+    }
+  }, [paramNew, searchParams, setSearchParams]);
 
   // Specialized sheets modal state
   const [selectedSpecializedRecord, setSelectedSpecializedRecord] = useState<SpecializedPneumoRecord | null>(null);
@@ -385,12 +410,28 @@ export const Patients: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <Link
-                    to="/consultations"
-                    className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs rounded-xl shadow-xs transition"
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => openEditPatientModal(selectedPatient)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl font-bold text-xs transition cursor-pointer whitespace-nowrap shrink-0"
                   >
-                    + Nouvelle Consultation
+                    <Edit3 className="w-3.5 h-3.5 text-teal-600" />
+                    <span>Modifier DPI</span>
+                  </button>
+                  <Link
+                    to={`/hospitalization?admit=1&patientId=${selectedPatient.id}`}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 font-bold text-xs rounded-xl transition whitespace-nowrap shrink-0"
+                  >
+                    <BedDouble className="w-3.5 h-3.5" />
+                    <span>Hospitaliser</span>
+                  </Link>
+                  <Link
+                    to={`/consultations?patientId=${selectedPatient.id}`}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs rounded-xl shadow-xs transition whitespace-nowrap shrink-0"
+                  >
+                    <Stethoscope className="w-3.5 h-3.5" />
+                    <span>+ Consultation</span>
                   </Link>
                 </div>
               </div>
@@ -430,18 +471,10 @@ export const Patients: React.FC = () => {
               {/* TAB 1: IDENTITÉ & FACTEURS DE RISQUE */}
               {activeTab === 'info' && (
                 <div className="space-y-4 text-xs">
-                  <div className="flex items-center justify-between">
+                  <div>
                     <span className="text-xxs font-extrabold text-slate-400 uppercase tracking-widest">
                       Synthèse DPI — État Civil & Antécédents Structurés
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => openEditPatientModal(selectedPatient)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 rounded-xl font-bold text-xxs transition cursor-pointer"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" />
-                      <span>Modifier État Civil & Antécédents DPI</span>
-                    </button>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

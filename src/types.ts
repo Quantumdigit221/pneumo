@@ -659,7 +659,15 @@ export interface NurseVitalRecord {
   pulse: number; // FC
   rr: number; // FR
   spo2: number; // SpO2 %
+  spo2Mode?: 'AIR_AMBIANT' | 'SOUS_O2';
+  o2FlowLiters?: number; // Débit O2 L/min
+  o2Device?: string; // Lunettes nasales, Masque simple, Masque HC, VNI...
+  fio2?: number; // FiO2 %
   temperature: number; // T°C
+  weight?: number; // kg
+  height?: number; // cm
+  bmi?: number; // IMC kg/m2
+  generalState?: 'BON' | 'ALTERE_LEGER' | 'ALTERE_SEVERE' | 'CACHECTION';
   bloodGlucose?: number; // Glycémie g/L
   painEva?: number; // 0 - 10
   consciousnessGlasgow?: number; // 3 - 15

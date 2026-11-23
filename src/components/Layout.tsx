@@ -27,9 +27,16 @@ import {
   RefreshCw,
   CheckCircle2,
   AlertTriangle,
-  Server
+  Server,
+  Search,
+  Command,
+  Plus,
+  UserPlus,
+  BedDouble,
+  Zap,
+  ArrowRight
 } from 'lucide-react';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { CenterSwitcher } from './CenterSwitcher';
 
 const ClinicalVoiceAssistant = React.lazy(() =>
@@ -44,7 +51,6 @@ interface SidebarItemProps {
   to: string;
   icon: React.ReactNode;
   label: string;
-  badge?: string;
   active: boolean;
   collapsed?: boolean;
   onClick: () => void;
@@ -54,7 +60,6 @@ const SidebarItem: React.FC<SidebarItemProps> = ({
   to,
   icon,
   label,
-  badge,
   active,
   collapsed = false,
   onClick
@@ -63,9 +68,9 @@ const SidebarItem: React.FC<SidebarItemProps> = ({
     <Link
       to={to}
       onClick={onClick}
-      title={collapsed ? `${label}${badge ? ` (${badge})` : ''}` : undefined}
+      title={collapsed ? label : undefined}
       className={`group relative flex items-center ${
-        collapsed ? 'justify-center px-2 py-2.5' : 'justify-between px-3.5 py-2.5'
+        collapsed ? 'justify-center px-2 py-2.5' : 'px-3.5 py-2.5'
       } rounded-xl transition-all duration-150 text-xs font-semibold ${
         active
           ? 'bg-teal-600 text-white shadow-xs'
@@ -73,49 +78,40 @@ const SidebarItem: React.FC<SidebarItemProps> = ({
       }`}
     >
       <div className={`flex items-center ${collapsed ? 'justify-center' : 'gap-2.5 min-w-0'}`}>
-        <span className={`${active ? 'text-white' : 'text-slate-400 group-hover:text-slate-700'} flex-shrink-0`}>
+        <span className={`${active ? 'text-white' : 'text-slate-400 group-hover:text-slate-700'} shrink-0`}>
           {icon}
         </span>
         {!collapsed && <span className="truncate">{label}</span>}
       </div>
 
-      {!collapsed && badge && (
-        <span
-          className={`text-3xs px-1.5 py-0.5 rounded-md font-bold uppercase tracking-wider ${
-            active ? 'bg-teal-700 text-white' : 'bg-slate-200 text-slate-700'
-          }`}
-        >
-          {badge}
-        </span>
-      )}
-
-      {/* Indicator dot when collapsed */}
-      {collapsed && badge && (
-        <span
-          className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-teal-500 ring-2 ring-white"
-          title={badge}
-        />
-      )}
-
       {/* Floating tooltip on hover in collapsed mode */}
       {collapsed && (
-        <div className="hidden group-hover:flex absolute left-full ml-2.5 px-2.5 py-1.5 bg-slate-900 text-white text-xs font-bold rounded-lg shadow-xl whitespace-nowrap z-50 items-center gap-1.5 pointer-events-none animate-in fade-in zoom-in-95 duration-100">
+        <div className="hidden group-hover:flex absolute left-full ml-2.5 px-2.5 py-1.5 bg-slate-900 text-white text-xs font-bold rounded-lg shadow-xl whitespace-nowrap z-50 items-center pointer-events-none">
           <span>{label}</span>
-          {badge && (
-            <span className="text-[10px] bg-teal-600 px-1.5 py-0.5 rounded font-mono font-semibold">
-              {badge}
-            </span>
-          )}
         </div>
       )}
     </Link>
   );
 };
 
+const CLINICAL_SHORTCUTS = [
+  { id: 'consult', label: 'Nouvelle Consultation (12 étapes)', path: '/consultations', shortcut: 'Alt+C', icon: Stethoscope, desc: 'Démarrer une observation complète' },
+  { id: 'urgency', label: 'Triage Urgence Respiratoire', path: '/consultations?mode=urgency', shortcut: 'Alt+U', icon: Zap, desc: 'Mode déchoquage / asthme aigu grave' },
+  { id: 'new-patient', label: 'Nouveau Dossier Patient (DPI)', path: '/patients?new=1', shortcut: 'Alt+P', icon: UserPlus, desc: 'Créer un IP unique & antécédents' },
+  { id: 'admit', label: 'Admettre en Hospitalisation', path: '/hospitalization?admit=1', shortcut: 'Alt+H', icon: BedDouble, desc: 'Attribuer un lit & initier le séjour' },
+  { id: 'scores', label: 'Scores Cliniques (ACT, mMRC, CURB-65)', path: '/clinical-scores', shortcut: 'Alt+S', icon: Activity, desc: 'Calculateurs validés de pneumologie' },
+  { id: 'imaging', label: 'Imagerie & Radio Thoracique IA', path: '/imaging-ai', shortcut: 'Alt+I', icon: Scan, desc: 'Analyse TorchXRay / MONAI' },
+  { id: 'docs', label: 'Ordonnances & Documents Officiels', path: '/documents', shortcut: 'Alt+D', icon: FileText, desc: 'CRH, certificats et fiches PNT' },
+  { id: 'nursing', label: 'Soins Paramédicaux (DAR)', path: '/nursing', shortcut: 'Alt+N', icon: HeartPulse, desc: 'Constantes, aérosols & transmissions' }
+];
+
 export const Layout: React.FC<LayoutProps> = ({ children }) => {
-  const { currentUser, currentCenter, logout, hostingerStatus, checkHostingerStatus } = useStore();
+  const { currentUser, patients, logout, hostingerStatus, checkHostingerStatus } = useStore();
   const location = useLocation();
+  const navigate = useNavigate();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isCommandOpen, setIsCommandOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState('');
   const [isHostingerModalOpen, setIsHostingerModalOpen] = useState(false);
   const [isTestingHostinger, setIsTestingHostinger] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
@@ -142,10 +138,12 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     }
   };
 
-  // Keyboard shortcut Ctrl+B or Cmd+B to toggle sidebar
+  // Global keyboard shortcuts: Ctrl+B (sidebar), Ctrl+K (command palette), Alt+C/U/P/H/S/I/D/N
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+      const key = e.key.toLowerCase();
+
+      if ((e.ctrlKey || e.metaKey) && key === 'b') {
         e.preventDefault();
         setSidebarState(prev => {
           const next = prev === 'expanded' ? 'collapsed' : 'expanded';
@@ -156,13 +154,68 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
           }
           return next;
         });
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && key === 'k') {
+        e.preventDefault();
+        setIsCommandOpen(prev => !prev);
+        setCommandQuery('');
+        return;
+      }
+
+      if (e.key === 'Escape' && isCommandOpen) {
+        setIsCommandOpen(false);
+        return;
+      }
+
+      const target = e.target as HTMLElement | null;
+      const isEditable =
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.tagName === 'SELECT' ||
+        target?.isContentEditable;
+      if (isEditable) return;
+
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        const altMap: Record<string, string> = {
+          c: '/consultations',
+          u: '/consultations?mode=urgency',
+          p: '/patients?new=1',
+          h: '/hospitalization?admit=1',
+          s: '/clinical-scores',
+          i: '/imaging-ai',
+          d: '/documents',
+          n: '/nursing'
+        };
+        if (altMap[key]) {
+          e.preventDefault();
+          navigate(altMap[key]);
+          setIsCommandOpen(false);
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [isCommandOpen, navigate]);
 
   if (!currentUser) return <>{children}</>;
+
+  const normalizedQuery = commandQuery.trim().toLowerCase();
+  const matchedPatients = normalizedQuery
+    ? patients
+        .filter(p => {
+          const full = `${p.firstName || ''} ${p.lastName || ''} ${p.code || ''} ${p.hospitalNumber || ''} ${p.phone || ''}`.toLowerCase();
+          return full.includes(normalizedQuery);
+        })
+        .slice(0, 6)
+    : patients.slice(0, 4);
+
+  const matchedShortcuts = normalizedQuery
+    ? CLINICAL_SHORTCUTS.filter(s =>
+        `${s.label} ${s.desc} ${s.shortcut}`.toLowerCase().includes(normalizedQuery)
+      )
+    : CLINICAL_SHORTCUTS;
 
   const isActive = (path: string) => location.pathname === path;
   const isCollapsed = sidebarState === 'collapsed';
@@ -320,8 +373,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                 <SidebarItem
                   to="/consultations"
                   icon={<Stethoscope className="w-4 h-4" />}
-                  label="Consultation (12 étapes & voix)"
-                  badge="IA"
+                  label="Consultation (12 étapes)"
                   active={isActive('/consultations')}
                   collapsed={isCollapsed}
                   onClick={() => setIsMobileMenuOpen(false)}
@@ -330,7 +382,6 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                   to="/specialized-forms"
                   icon={<Wind className="w-4 h-4" />}
                   label="Formulaires Spécialisés"
-                  badge="TB/BPCO"
                   active={isActive('/specialized-forms')}
                   collapsed={isCollapsed}
                   onClick={() => setIsMobileMenuOpen(false)}
@@ -339,7 +390,6 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                   to="/clinical-scores"
                   icon={<Activity className="w-4 h-4" />}
                   label="Scores Cliniques"
-                  badge="Calculs"
                   active={isActive('/clinical-scores')}
                   collapsed={isCollapsed}
                   onClick={() => setIsMobileMenuOpen(false)}
@@ -356,7 +406,6 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                   to="/documents"
                   icon={<FileText className="w-4 h-4" />}
                   label="Documents Médicaux"
-                  badge="CRH/Ordo"
                   active={isActive('/documents')}
                   collapsed={isCollapsed}
                   onClick={() => setIsMobileMenuOpen(false)}
@@ -401,7 +450,6 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                   to="/explorations"
                   icon={<Layers className="w-4 h-4" />}
                   label="Explorations Médicales"
-                  badge="Courbes"
                   active={isActive('/explorations')}
                   collapsed={isCollapsed}
                   onClick={() => setIsMobileMenuOpen(false)}
@@ -410,7 +458,6 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                   to="/imaging-ai"
                   icon={<Scan className="w-4 h-4" />}
                   label="Imagerie & IA Thoracique"
-                  badge="Ark+/MONAI"
                   active={isActive('/imaging-ai')}
                   collapsed={isCollapsed}
                   onClick={() => setIsMobileMenuOpen(false)}
@@ -419,7 +466,6 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                   to="/research-stats"
                   icon={<TrendingUp className="w-4 h-4" />}
                   label="Statistiques & Recherche"
-                  badge="XLSX"
                   active={isActive('/research-stats')}
                   collapsed={isCollapsed}
                   onClick={() => setIsMobileMenuOpen(false)}
@@ -595,40 +641,203 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
             </div>
           </div>
 
-          {/* Right: Hospital, User Info & Keyboard Shortcut */}
-          <div className="flex items-center gap-3 shrink-0">
-
-
-            {/* Active Service Badge */}
-            <div className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 bg-teal-50 text-teal-800 border border-teal-200 rounded-lg text-xxs font-bold">
-              <span className="w-1.5 h-1.5 rounded-full bg-teal-600 animate-pulse" />
-              <span>Pneumologie & Infectiologie</span>
-            </div>
-
-            {/* Connected User Pill */}
-            <div className="flex items-center gap-2 pl-2 border-l border-slate-200">
-              <div className="w-7 h-7 rounded-full bg-teal-600 text-white font-extrabold text-xxs flex items-center justify-center shadow-xs">
-                {(currentUser.name || currentUser.email || 'CH').substring(0, 2).toUpperCase()}
-              </div>
-              <div className="hidden sm:block text-left">
-                <span className="text-xs font-bold text-slate-800 block leading-tight">
-                  {currentUser.name || currentUser.email || 'Praticien'}
-                </span>
-                <span className="text-3xs text-slate-400 font-medium block">
-                  {currentUser.role || 'Praticien'}
-                </span>
-              </div>
-            </div>
-
-            {/* Keyboard shortcut hint */}
-            <kbd
-              className="hidden lg:inline-flex px-1.5 py-0.5 text-3xs font-mono font-bold bg-slate-100 text-slate-500 border border-slate-300 rounded shadow-2xs"
-              title="Raccourci clavier pour ouvrir/fermer le menu"
+          {/* Right: Quick Search & Shortcuts Palette + Single Contextual CTA */}
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setCommandQuery('');
+                setIsCommandOpen(true);
+              }}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 hover:bg-white hover:border-teal-400 text-slate-600 hover:text-slate-900 text-xs transition cursor-pointer whitespace-nowrap shrink-0"
+              title="Rechercher un patient ou lancer un raccourci (Ctrl+K)"
             >
-              Ctrl+B
-            </kbd>
+              <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              <span className="hidden sm:inline font-medium text-slate-500">Patient ou raccourci…</span>
+              <kbd className="hidden md:inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-white text-slate-500 border border-slate-200 rounded">
+                Ctrl+K
+              </kbd>
+            </button>
+
+            {location.pathname !== '/consultations' ? (
+              <Link
+                to="/consultations"
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold transition whitespace-nowrap shrink-0 shadow-2xs"
+                title="Démarrer une consultation (Alt+C)"
+              >
+                <Plus className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden sm:inline">Consultation</span>
+              </Link>
+            ) : (
+              <Link
+                to="/patients"
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-bold transition whitespace-nowrap shrink-0"
+                title="Accéder aux dossiers patients"
+              >
+                <Users className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                <span className="hidden sm:inline">Dossiers Patients</span>
+              </Link>
+            )}
+
+            {isHidden && (
+              <button
+                type="button"
+                onClick={logout}
+                className="p-1.5 rounded-lg border border-slate-200 text-slate-500 hover:text-red-600 hover:bg-red-50 transition cursor-pointer shrink-0"
+                title={`Déconnexion (${currentUser.name || 'Praticien'})`}
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </header>
+
+        {/* Global Command & Patient Quick-Jump Palette (Ctrl+K) */}
+        {isCommandOpen && (
+          <div
+            className="fixed inset-0 z-50 flex items-start justify-center pt-16 sm:pt-20 px-4 bg-slate-900/45 backdrop-blur-xs"
+            onClick={() => setIsCommandOpen(false)}
+          >
+            <div
+              className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-2xl overflow-hidden"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Search Bar */}
+              <div className="flex items-center gap-3 px-4 py-3.5 border-b border-slate-100">
+                <Search className="w-4 h-4 text-teal-600 shrink-0" />
+                <input
+                  type="text"
+                  autoFocus
+                  value={commandQuery}
+                  onChange={e => setCommandQuery(e.target.value)}
+                  placeholder="Rechercher un patient (Nom, IP, CHREIN) ou un raccourci clinique…"
+                  className="flex-1 text-sm font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none bg-transparent"
+                />
+                <button
+                  type="button"
+                  onClick={() => setIsCommandOpen(false)}
+                  className="px-2 py-0.5 text-[10px] font-mono font-semibold text-slate-500 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
+                >
+                  Échap
+                </button>
+              </div>
+
+              <div className="max-h-[65vh] overflow-y-auto divide-y divide-slate-100">
+                {/* Patients quick jump */}
+                <div className="p-3 space-y-1.5">
+                  <div className="px-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    {normalizedQuery ? `Patients correspondants (${matchedPatients.length})` : 'Accès Rapide Patients'}
+                  </div>
+                  {matchedPatients.length > 0 ? (
+                    <div className="space-y-1">
+                      {matchedPatients.map(p => (
+                        <div
+                          key={p.id}
+                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-2.5 py-2 rounded-xl hover:bg-slate-50 transition"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 text-xs font-bold text-slate-900 truncate">
+                              <span>{p.firstName} {p.lastName}</span>
+                              <span className="font-mono text-[11px] font-semibold text-teal-700">{p.code}</span>
+                            </div>
+                            <div className="text-[11px] text-slate-500 truncate">
+                              {p.age} ans · {p.gender === 'M' ? 'H' : 'F'}{p.chronicConditions ? ` · ${p.chronicConditions}` : ''}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsCommandOpen(false);
+                                navigate(`/patients?patientId=${p.id}`);
+                              }}
+                              className="px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-white border border-slate-200 hover:border-teal-400 hover:text-teal-700 rounded-lg transition cursor-pointer whitespace-nowrap"
+                            >
+                              DPI
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsCommandOpen(false);
+                                navigate(`/consultations?patientId=${p.id}`);
+                              }}
+                              className="px-2.5 py-1 text-[11px] font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-lg transition cursor-pointer whitespace-nowrap"
+                            >
+                              Consulter
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsCommandOpen(false);
+                                navigate(`/hospitalization?admit=1&patientId=${p.id}`);
+                              }}
+                              className="px-2.5 py-1 text-[11px] font-semibold text-sky-700 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg transition cursor-pointer whitespace-nowrap"
+                            >
+                              Hospitaliser
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="px-2 py-2 text-xs text-slate-400">Aucun patient trouvé.</p>
+                  )}
+                </div>
+
+                {/* Clinical direct shortcuts */}
+                {matchedShortcuts.length > 0 && (
+                  <div className="p-3 space-y-1.5">
+                    <div className="px-2 text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                      Raccourcis Cliniques & Navigation
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+                      {matchedShortcuts.map(item => {
+                        const IconComp = item.icon;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => {
+                              setIsCommandOpen(false);
+                              navigate(item.path);
+                            }}
+                            className="flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl hover:bg-teal-50/70 text-left transition cursor-pointer group"
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div className="w-7 h-7 rounded-lg bg-slate-100 group-hover:bg-teal-100 text-slate-600 group-hover:text-teal-700 flex items-center justify-center shrink-0">
+                                <IconComp className="w-3.5 h-3.5" />
+                              </div>
+                              <div className="min-w-0">
+                                <span className="text-xs font-bold text-slate-800 block truncate">{item.label}</span>
+                                <span className="text-[11px] text-slate-500 block truncate">{item.desc}</span>
+                              </div>
+                            </div>
+                            <kbd className="px-1.5 py-0.5 text-[10px] font-mono font-semibold text-slate-500 bg-slate-100 border border-slate-200 rounded shrink-0">
+                              {item.shortcut}
+                            </kbd>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer Shortcut Legend */}
+              <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="flex items-center gap-1">
+                    <Command className="w-3 h-3 text-teal-600" />
+                    <strong className="font-mono text-slate-700">Ctrl+K</strong> Palette
+                  </span>
+                  <span><strong className="font-mono text-slate-700">Ctrl+B</strong> Menu latéral</span>
+                  <span><strong className="font-mono text-slate-700">Ctrl+S</strong> Sauvegarder consultation</span>
+                </div>
+                <span className="text-slate-400">CHREIN Kaolack</span>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Dynamic Route Screen Content */}
         <main className="flex-1 p-4 lg:p-6 pb-20">

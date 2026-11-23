@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useStore } from '../store';
-import { startDictationSession, DictationSession } from '../utils/audioRecorder';
+import { startDictationSession, transcribeAudioBlob, DictationSession } from '../utils/audioRecorder';
 import {
   Mic,
   MicOff,
@@ -11,20 +11,12 @@ import {
   X,
   ChevronDown,
   ChevronUp,
-  Activity,
   Send,
-  Stethoscope,
-  Pill,
-  Users,
-  Compass,
   CheckCircle2,
   AlertTriangle,
-  RotateCcw,
   Cpu,
-  Layers,
-  BookOpen,
-  Radio,
-  Loader2
+  Loader2,
+  Upload
 } from 'lucide-react';
 
 interface VoiceMessage {
@@ -79,6 +71,7 @@ export const ClinicalVoiceAssistant: React.FC = () => {
   const dictationSessionRef = useRef<DictationSession | null>(null);
   const recordingTimerRef = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const nativeAudioInputRef = useRef<HTMLInputElement>(null);
 
   // Keep refs for latest values without triggering re-subscriptions
   const selectedModelRef = useRef(selectedModel);
@@ -146,6 +139,8 @@ export const ClinicalVoiceAssistant: React.FC = () => {
     try {
       const session = await startDictationSession({
         context: 'Ordre clinique vocal pour dossier patient pneumologie Kaolack',
+        fieldName: 'Assistante Vocale Clinique',
+        requestId: 'clinical-voice-assistant',
         onInterimText: (text) => {
           setTranscript(text);
         },
@@ -177,9 +172,34 @@ export const ClinicalVoiceAssistant: React.FC = () => {
 
       dictationSessionRef.current = session;
     } catch (err: any) {
-      console.warn('[Start Listening Error]:', err);
+      console.warn('[Start Listening Notice]:', err);
       setIsListening(false);
       setMicStatus('IDLE');
+    }
+  };
+
+  const handleNativeAudioFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+
+    setMicErrorMessage(null);
+    setMicStatus('TRANSCRIBING');
+    try {
+      const transcribed = await transcribeAudioBlob(
+        file,
+        file.type || 'audio/mp4',
+        'Ordre clinique vocal pour Assistante Clinique CHREIN'
+      );
+      setMicStatus('IDLE');
+      if (transcribed && transcribed.trim().length > 1) {
+        await handleProcessCommand(transcribed.trim());
+      } else {
+        setMicErrorMessage("Aucune parole audible détectée dans l'enregistrement.");
+      }
+    } catch (err: any) {
+      setMicStatus('IDLE');
+      setMicErrorMessage(err?.message || "Erreur lors de la transcription audio.");
     }
   };
 
@@ -218,9 +238,24 @@ export const ClinicalVoiceAssistant: React.FC = () => {
     }
   };
 
-  // Cleanup on unmount
+  // Listen for modal fallback insert/retry targeted at ClinicalVoiceAssistant & cleanup on unmount
   useEffect(() => {
+    const handleInsertSample = (e: any) => {
+      if (e?.detail?.requestId === 'clinical-voice-assistant' && e?.detail?.text) {
+        setMicErrorMessage(null);
+        handleProcessCommand(e.detail.text);
+      }
+    };
+    const handleRetryMic = (e: any) => {
+      if (e?.detail?.requestId === 'clinical-voice-assistant') {
+        startListening();
+      }
+    };
+    window.addEventListener('insert-dictation-sample', handleInsertSample);
+    window.addEventListener('retry-native-mic', handleRetryMic);
     return () => {
+      window.removeEventListener('insert-dictation-sample', handleInsertSample);
+      window.removeEventListener('retry-native-mic', handleRetryMic);
       if (dictationSessionRef.current) {
         dictationSessionRef.current.abort();
       }
@@ -541,7 +576,7 @@ export const ClinicalVoiceAssistant: React.FC = () => {
           <div className="bg-gradient-to-r from-teal-700 via-teal-800 to-slate-900 text-white p-3.5 flex items-center justify-between">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-teal-500/30 border border-teal-400/40 flex items-center justify-center text-teal-200">
-                <Sparkles className="w-4 h-4 animate-pulse" />
+                <Sparkles className="w-4 h-4" />
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
@@ -624,20 +659,51 @@ export const ClinicalVoiceAssistant: React.FC = () => {
             </div>
           )}
 
-          {/* Mic Permission or Error Alert Banner */}
+          <input
+            ref={nativeAudioInputRef}
+            type="file"
+            accept="audio/*"
+            capture="microphone"
+            onChange={handleNativeAudioFile}
+            className="hidden"
+          />
+
+          {/* Mic Permission or Error Alert Banner with Direct Native Fallback */}
           {micErrorMessage && (
-            <div className="px-3.5 py-2.5 bg-rose-50 border-b border-rose-200 text-rose-800 text-xs flex items-start gap-2">
+            <div className="px-3.5 py-2.5 bg-rose-50 border-b border-rose-200 text-rose-900 text-xs flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
-              <div className="flex-1">
+              <div className="flex-1 space-y-1.5">
                 <p className="font-bold text-xxs leading-tight">{micErrorMessage}</p>
-                <p className="text-3xs text-rose-600 mt-0.5">
-                  Cliquez sur l'icône de cadenas ou caméra/micro dans la barre d'adresse de votre navigateur pour autoriser le micro.
-                </p>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => nativeAudioInputRef.current?.click()}
+                    className="inline-flex items-center gap-1 px-2 py-1 bg-teal-700 hover:bg-teal-800 text-white rounded-md text-[10px] font-black transition cursor-pointer"
+                  >
+                    <Upload className="w-3 h-3" />
+                    <span>Micro natif OS</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      window.dispatchEvent(new CustomEvent('microphone-permission-denied', {
+                        detail: {
+                          message: micErrorMessage,
+                          fieldName: 'Assistante Vocale Clinique',
+                          requestId: 'clinical-voice-assistant',
+                        },
+                      }));
+                    }}
+                    className="px-2 py-1 bg-white hover:bg-rose-100 border border-rose-300 text-rose-800 rounded-md text-[10px] font-bold transition cursor-pointer"
+                  >
+                    Options / Win+H
+                  </button>
+                </div>
               </div>
               <button
                 type="button"
                 onClick={() => setMicErrorMessage(null)}
-                className="text-rose-500 hover:text-rose-700 p-0.5"
+                className="text-rose-500 hover:text-rose-700 p-0.5 cursor-pointer"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
