@@ -11,7 +11,11 @@ export const Auth: React.FC = () => {
 
   // Security: Brute-force & rate-limiting protection
   const [failedAttempts, setFailedAttempts] = useState(() => {
-    return Number(sessionStorage.getItem('auth_failed_attempts') || 0);
+    try {
+      return Number(sessionStorage.getItem('auth_failed_attempts') || 0);
+    } catch {
+      return 0;
+    }
   });
   const [lockoutSeconds, setLockoutSeconds] = useState(0);
 
@@ -36,7 +40,11 @@ export const Auth: React.FC = () => {
     if (!ok) {
       const nextAttempts = failedAttempts + 1;
       setFailedAttempts(nextAttempts);
-      sessionStorage.setItem('auth_failed_attempts', String(nextAttempts));
+      try {
+        sessionStorage.setItem('auth_failed_attempts', String(nextAttempts));
+      } catch {
+        // ignore storage error in sandbox
+      }
 
       if (nextAttempts >= 5) {
         setLockoutSeconds(30);
@@ -45,7 +53,11 @@ export const Auth: React.FC = () => {
         setErrorMsg(`Identifiants non reconnus. Essayez l'un des accès rapides ci-dessous.`);
       }
     } else {
-      sessionStorage.removeItem('auth_failed_attempts');
+      try {
+        sessionStorage.removeItem('auth_failed_attempts');
+      } catch {
+        // ignore
+      }
     }
     setSubmitting(false);
   };

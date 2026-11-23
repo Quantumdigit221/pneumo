@@ -4,13 +4,38 @@ import {
   Consultation,
   ConsultationTwelveSteps,
   ClinicalDiagnosis,
-  PrescriptionItem,
   DiagnosisType,
-  DiagnosisStatus
+  DiagnosisStatus,
+  OrderedParaclinicalExam,
+  VitalsSeriesEntry,
+  SyndromicPriorityItem,
+  MaritalStatus,
+  EducationLevel,
+  ClinicalScoreCalculation,
+  MedicalExploration
 } from '../types';
 import { startDictationSession, DictationSession } from '../utils/audioRecorder';
 import MicrophonePermissionModal from '../components/MicrophonePermissionModal';
 import VoiceDictationButton from '../components/VoiceDictationButton';
+import {
+  PatientDpiHistoryEditor,
+  DpiAntecedentsValue,
+  buildDpiFromPatient,
+  extractConsumptionsFromDpi
+} from '../components/PatientDpiHistoryEditor';
+import {
+  MARITAL_STATUS_OPTIONS,
+  EDUCATION_LEVEL_OPTIONS,
+  O2_DEVICE_OPTIONS,
+  PARACLINICAL_CATALOG,
+  MacroExplorationCategoryId,
+  calcBmi
+} from '../utils/dpiConstants';
+import {
+  CLINICAL_SCORES_DEFINITIONS,
+  getSuggestedScoresForHypotheses,
+  buildAutoFilledScoreInputs
+} from '../utils/clinicalScoresEngine';
 import {
   Activity,
   Mic,
@@ -26,7 +51,6 @@ import {
   HeartPulse,
   Wind,
   FileText,
-  Calendar,
   Layers,
   Search,
   Check,
@@ -34,25 +58,25 @@ import {
   ChevronLeft,
   X,
   History,
-  AlertCircle,
-  Copy,
   Pill,
   ShieldCheck,
   Thermometer,
   Gauge,
   Zap,
-  RotateCcw,
   LayoutList,
   ListOrdered,
   Calculator,
   BookmarkCheck,
-  Columns,
-  Rows,
   ChevronDown,
   ChevronUp,
   Pin,
   PinOff,
-  QrCode
+  QrCode,
+  ArrowUp,
+  ArrowDown,
+  Upload,
+  Paperclip,
+  ClipboardList
 } from 'lucide-react';
 
 // CIM-11 Catalog of frequent Pneumology & Infectious conditions in Senegal
@@ -334,7 +358,7 @@ export const CLINICAL_PHASES = [
     title: 'Phase III : Synthèse Diagnostique',
     shortTitle: 'III. Synthèse',
     steps: [7, 8, 9, 10],
-    desc: 'Résumé syndromique, score CRB-65, hypothèses, explorations et CIM-11'
+    desc: 'Résumé syndromique, hypothèses, scores cliniques contextualisés, explorations et CIM-11'
   },
   {
     phase: 4,
@@ -813,8 +837,15 @@ const FULL_CLINICAL_SCENARIOS = [
 export const Consultations: React.FC = () => {
   const {
     patients,
+    updatePatient,
     consultations,
     saveConsultation,
+    hospitalizations,
+    addNurseVitalRecord,
+    medicalExplorations,
+    saveMedicalExploration,
+    clinicalScoreCalculations,
+    saveClinicalScoreCalculation,
     currentUser,
     currentCenter
   } = useStore();
@@ -852,12 +883,23 @@ export const Consultations: React.FC = () => {
 
   // Interactive Clinical Calculators & Presets state
   const [selectedMmrcGrade, setSelectedMmrcGrade] = useState<number | null>(null);
-  const [crb65Confusion, setCrb65Confusion] = useState(false);
-  const [crb65RrHigh, setCrb65RrHigh] = useState(false);
-  const [crb65BpLow, setCrb65BpLow] = useState(false);
-  const [crb65AgeHigh, setCrb65AgeHigh] = useState(false);
   const [selectedDrugCategory, setSelectedDrugCategory] = useState<string>('Bronchodilatateurs & Aérosols');
   const [activeAuscultationZone, setActiveAuscultationZone] = useState<string>('apex_droit');
+
+  // Step 7: Structured syndromic builder state
+  const [newSyndromeText, setNewSyndromeText] = useState('');
+  const [newSyndromeSeverity, setNewSyndromeSeverity] = useState<'CRITIQUE' | 'MAJEUR' | 'MODERE'>('MAJEUR');
+
+  // Step 9: Categorized A-F paraclinical selector state
+  const [selectedMacroCat, setSelectedMacroCat] = useState<MacroExplorationCategoryId>('BIOLOGIE');
+  const [customExamName, setCustomExamName] = useState('');
+  const [newFollowUpInputs, setNewFollowUpInputs] = useState<Record<string, string>>({});
+
+  // Contextual Clinical Scores panel state (after Step 8 Hypothèses & Step 10 Diagnostics)
+  const [activeInlineScoreId, setActiveInlineScoreId] = useState<ClinicalScoreCalculation['scoreId'] | null>(null);
+  const [inlineScoreInputs, setInlineScoreInputs] = useState<Record<string, any>>({});
+  const [inlineScoreSearch, setInlineScoreSearch] = useState('');
+  const [inlineScoreSavedMsg, setInlineScoreSavedMsg] = useState<string | null>(null);
 
   // CIM-11 Search state
   const [cim11Query, setCim11Query] = useState('');
@@ -872,6 +914,14 @@ export const Consultations: React.FC = () => {
 
   const selectedPatient = patients.find(p => p.id === selectedPatientId) || patients[0];
   const patientConsultations = consultations.filter(c => c.patientId === selectedPatient?.id);
+  const patientExplorations = useMemo(
+    () => medicalExplorations.filter(e => e.patientId === selectedPatient?.id),
+    [medicalExplorations, selectedPatient?.id]
+  );
+  const patientScoresToday = useMemo(
+    () => clinicalScoreCalculations.filter(s => s.patientId === selectedPatient?.id),
+    [clinicalScoreCalculations, selectedPatient?.id]
+  );
 
   // 12-Step Form State conforming strictly to Section 4 of Cahier des Charges
   const [form12Steps, setForm12Steps] = useState<ConsultationTwelveSteps>({
@@ -992,12 +1042,132 @@ export const Consultations: React.FC = () => {
     antibioticGuidance: 'Respecter le schéma quadrithérapie du PNT sans ajout intempestif de fluoroquinolones qui masqueraient une tuberculose résistante.'
   });
 
+  // Carry-forward patient civil status & antecedents on patient switch (without clobbering manual scenario injection)
+  const lastAutoLoadedPatientIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!selectedPatient?.id || selectedPatient.id === lastAutoLoadedPatientIdRef.current) return;
+    lastAutoLoadedPatientIdRef.current = selectedPatient.id;
+
+    const dpi = buildDpiFromPatient(selectedPatient);
+    const antSummaryParts: string[] = [];
+    if (dpi.medicalAntecedents.length > 0) antSummaryParts.push(dpi.medicalAntecedents.join(', '));
+    if (dpi.medicalAntecedentsOther) antSummaryParts.push(dpi.medicalAntecedentsOther);
+    if (dpi.smokingStatus !== 'JAMAIS') {
+      antSummaryParts.push(
+        `Tabagisme ${dpi.smokingStatus === 'ANCIEN' ? 'sevré' : 'actif'} (${dpi.smokingPackYears} PA)`
+      );
+    }
+    if (dpi.biomassExposure) antSummaryParts.push('Exposition biomasse');
+    if (selectedPatient.chronicConditions && antSummaryParts.length === 0) {
+      antSummaryParts.push(selectedPatient.chronicConditions);
+    }
+
+    setForm12Steps(prev => ({
+      ...prev,
+      maritalStatus: selectedPatient.maritalStatus || prev.maritalStatus || 'Non renseigné',
+      educationLevel: selectedPatient.educationLevel || prev.educationLevel || 'Non renseigné',
+      profession: selectedPatient.profession || prev.profession || '',
+      emergencyPhone: selectedPatient.emergencyPhone || selectedPatient.phone || prev.emergencyPhone || '',
+      riskFactors: {
+        ...prev.riskFactors,
+        smokingStatus: dpi.smokingStatus,
+        cigarettesPerDay: dpi.cigarettesPerDay,
+        smokingDurationYears: dpi.smokingDurationYears,
+        smokingStoppedYear: dpi.smokingStoppedYear,
+        smokingPeriods: dpi.smokingPeriods,
+        smokingPA: dpi.smokingPackYears,
+        biomassExposure: dpi.biomassExposure,
+        cannabis: dpi.cannabis,
+        alcohol: dpi.alcohol,
+        otherDrugs: dpi.otherDrugs,
+        medicalAntecedents: dpi.medicalAntecedents,
+        medicalAntecedentsOther: dpi.medicalAntecedentsOther,
+        occupationalProfile: dpi.occupationalProfile,
+        occupationalExposure: dpi.occupationalProfile.currentProfession || prev.riskFactors.occupationalExposure,
+        surgicalHistory: dpi.surgicalHistory,
+        obgynHistory: dpi.obgynHistory,
+        allergiesAtopy: selectedPatient.allergies || prev.riskFactors.allergiesAtopy
+      },
+      antecedentsText: antSummaryParts.length > 0 ? antSummaryParts.join('. ') : prev.antecedentsText,
+      syndromicSelectedAntecedents: dpi.medicalAntecedents.length > 0
+        ? [...dpi.medicalAntecedents]
+        : prev.syndromicSelectedAntecedents || []
+    }));
+  }, [selectedPatient]);
+
+  // Helper: map ConsultationTwelveSteps.riskFactors <-> DpiAntecedentsValue
+  const dpiAntecedentsValue: DpiAntecedentsValue = useMemo(() => {
+    const rf = form12Steps.riskFactors || {};
+    return {
+      smokingStatus: rf.smokingStatus || (rf.smokingStoppedYear ? 'ANCIEN' : (rf.smokingPA || 0) > 0 ? 'ACTUEL' : 'JAMAIS'),
+      cigarettesPerDay: rf.cigarettesPerDay || 0,
+      smokingDurationYears: rf.smokingDurationYears || 0,
+      smokingStoppedYear: rf.smokingStoppedYear || '',
+      smokingPeriods: rf.smokingPeriods || [],
+      smokingPackYears: rf.smokingPA || 0,
+      biomassExposure: Boolean(rf.biomassExposure),
+      passiveSmoking: false,
+      cannabis: {
+        status: rf.cannabis?.status || 'JAMAIS',
+        frequency: rf.cannabis?.frequency || '',
+        duration: rf.cannabis?.duration || ''
+      },
+      alcohol: {
+        status: rf.alcohol?.status || 'JAMAIS',
+        frequency: rf.alcohol?.frequency || '',
+        quantity: rf.alcohol?.quantity || ''
+      },
+      otherDrugs: {
+        status: rf.otherDrugs?.status || 'NON_RENSEIGNE',
+        substance: rf.otherDrugs?.substance || '',
+        frequency: rf.otherDrugs?.frequency || '',
+        duration: rf.otherDrugs?.duration || '',
+        route: rf.otherDrugs?.route || ''
+      },
+      medicalAntecedents: rf.medicalAntecedents || [],
+      medicalAntecedentsOther: rf.medicalAntecedentsOther || '',
+      occupationalProfile: rf.occupationalProfile || {
+        currentProfession: form12Steps.profession || selectedPatient?.profession || '',
+        previousProfessions: '',
+        exposures: rf.biomassExposure ? ['BIOMASSE'] : [],
+        otherExposures: '',
+        exposureConditions: ''
+      },
+      surgicalHistory: rf.surgicalHistory || [],
+      obgynHistory: rf.obgynHistory || {}
+    };
+  }, [form12Steps.riskFactors, form12Steps.profession, selectedPatient?.profession]);
+
+  const handleDpiAntecedentsChange = (nextDpi: DpiAntecedentsValue) => {
+    setForm12Steps(prev => ({
+      ...prev,
+      profession: nextDpi.occupationalProfile.currentProfession || prev.profession,
+      riskFactors: {
+        ...prev.riskFactors,
+        smokingStatus: nextDpi.smokingStatus,
+        cigarettesPerDay: nextDpi.cigarettesPerDay,
+        smokingDurationYears: nextDpi.smokingDurationYears,
+        smokingStoppedYear: nextDpi.smokingStoppedYear,
+        smokingPeriods: nextDpi.smokingPeriods,
+        smokingPA: nextDpi.smokingPackYears,
+        biomassExposure: nextDpi.biomassExposure,
+        cannabis: nextDpi.cannabis,
+        alcohol: nextDpi.alcohol,
+        otherDrugs: nextDpi.otherDrugs,
+        medicalAntecedents: nextDpi.medicalAntecedents,
+        medicalAntecedentsOther: nextDpi.medicalAntecedentsOther,
+        occupationalProfile: nextDpi.occupationalProfile,
+        occupationalExposure: nextDpi.occupationalProfile.currentProfession || prev.riskFactors.occupationalExposure,
+        surgicalHistory: nextDpi.surgicalHistory,
+        obgynHistory: nextDpi.obgynHistory
+      }
+    }));
+  };
+
   // Calculate BMI dynamically
   const bmiCalculation = useMemo(() => {
-    const w = Number(form12Steps.vitals.weight);
-    const h = Number(form12Steps.vitals.height);
-    if (!w || !h || h <= 0) return null;
-    const bmiVal = Number((w / ((h / 100) ** 2)).toFixed(1));
+    const bmiVal = calcBmi(form12Steps.vitals.weight, form12Steps.vitals.height);
+    if (!bmiVal) return null;
     let cat = 'Poids normal';
     let color = 'text-emerald-700 bg-emerald-50';
     if (bmiVal < 16) {
@@ -1019,69 +1189,103 @@ export const Consultations: React.FC = () => {
   // Critical vitals alerts
   const vitalsAlerts = useMemo(() => {
     const alerts: string[] = [];
-    const spo2 = Number(form12Steps.vitals.spo2Ambient);
+    const effectiveSpo2 = form12Steps.vitals.spo2Mode === 'SOUS_O2'
+      ? Number(form12Steps.vitals.spo2O2)
+      : Number(form12Steps.vitals.spo2Ambient);
     const rr = Number(form12Steps.vitals.rr);
     const temp = Number(form12Steps.vitals.temperature);
-    if (spo2 && spo2 < 90) alerts.push('🚨 Désaturation sévère SpO2 < 90% en air ambiant (Urgence oxygénothérapie)');
-    else if (spo2 && spo2 < 93) alerts.push('⚠️ Hypoxémie modérée SpO2 90-93%');
+    if (effectiveSpo2 && effectiveSpo2 < 90) {
+      alerts.push(
+        form12Steps.vitals.spo2Mode === 'SOUS_O2'
+          ? `🚨 Désaturation sévère SpO2 = ${effectiveSpo2}% sous O2 (Réévaluer débit/dispositif)`
+          : '🚨 Désaturation sévère SpO2 < 90% en air ambiant (Urgence oxygénothérapie)'
+      );
+    } else if (effectiveSpo2 && effectiveSpo2 < 93) {
+      alerts.push(`⚠️ Hypoxémie modérée SpO2 = ${effectiveSpo2}%`);
+    }
     if (rr && rr >= 26) alerts.push(`⚠️ Polypnée / Tachypnée marquée (FR = ${rr}/min)`);
     if (temp && temp >= 38.5) alerts.push(`🌡️ Syndrome fébrile élevé (T° = ${temp}°C)`);
     else if (temp && temp <= 35.8) alerts.push(`❄️ Hypothermie anormale (T° = ${temp}°C)`);
     return alerts;
-  }, [form12Steps.vitals.spo2Ambient, form12Steps.vitals.rr, form12Steps.vitals.temperature]);
-
-  // CRB-65 Pneumonia Severity Calculation
-  const crb65Data = useMemo(() => {
-    let score = 0;
-    const reasons: string[] = [];
-    if (crb65Confusion) { score += 1; reasons.push('Confusion'); }
-    const rr = Number(form12Steps.vitals.rr);
-    if (crb65RrHigh || rr >= 30) { score += 1; reasons.push(`FR >= 30 (${rr || 30}/min)`); }
-    const bpParts = (form12Steps.vitals.bp || '').split('/');
-    const pas = parseInt(bpParts[0] || '120', 10);
-    const pad = parseInt(bpParts[1] || '80', 10);
-    if (crb65BpLow || (pas && pas < 90) || (pad && pad <= 60)) { score += 1; reasons.push(`Hypotension (${form12Steps.vitals.bp || 'PAS<90'})`); }
-    if (crb65AgeHigh || (selectedPatient?.age && selectedPatient.age >= 65)) { score += 1; reasons.push(`Âge >= 65 (${selectedPatient?.age || 65} ans)`); }
-
-    let severity = 'Risque faible (Mortalité < 1%)';
-    let recommendation = 'Prise en charge ambulatoire possible';
-    let badgeColor = 'bg-emerald-100 text-emerald-800 border-emerald-200';
-    if (score === 1 || score === 2) {
-      severity = 'Risque intermédiaire (Mortalité 1-8%)';
-      recommendation = 'Évaluation hospitalière / Surveillance CHREIN';
-      badgeColor = 'bg-amber-100 text-amber-800 border-amber-200';
-    } else if (score >= 3) {
-      severity = 'Risque élevé (Mortalité > 15%)';
-      recommendation = 'Hospitalisation urgente en Pneumologie / Soins continus';
-      badgeColor = 'bg-rose-100 text-rose-800 border-rose-200';
-    }
-    return { score, reasons, severity, recommendation, badgeColor };
-  }, [crb65Confusion, crb65RrHigh, crb65BpLow, crb65AgeHigh, form12Steps.vitals.rr, form12Steps.vitals.bp, selectedPatient?.age]);
+  }, [form12Steps.vitals.spo2Ambient, form12Steps.vitals.spo2O2, form12Steps.vitals.spo2Mode, form12Steps.vitals.rr, form12Steps.vitals.temperature]);
 
   // PNT 2RHZE Dosage Calculator
   const pntDosage = useMemo(() => {
     return getPntRhzeDosage(Number(form12Steps.vitals.weight) || 55);
   }, [form12Steps.vitals.weight]);
 
-  // Apply mMRC Dyspnea grade
+  // Apply mMRC Dyspnea grade inside Step 3 (Histoire de la maladie)
   const handleApplyMmrcGrade = (grade: number) => {
     setSelectedMmrcGrade(grade);
     const scale = MMRC_DYSPNEA_SCALE.find(s => s.grade === grade);
     if (!scale) return;
-    const textToAppend = `Dyspnée mMRC Stade ${grade} (${scale.desc})`;
-    setForm12Steps(prev => ({
-      ...prev,
-      antecedentsText: prev.antecedentsText ? `${prev.antecedentsText}. ${textToAppend}` : textToAppend
-    }));
+    const textToAppend = `Dyspnée évaluée au stade mMRC ${grade} (${scale.desc}).`;
+    setForm12Steps(prev => {
+      const cleaned = (prev.historyOfIllness || '').replace(/Dyspnée évaluée au stade mMRC \d \([^)]*\)\.?/g, '').trim();
+      return {
+        ...prev,
+        mmrcGrade: grade,
+        historyOfIllness: cleaned ? `${cleaned} ${textToAppend}` : textToAppend
+      };
+    });
   };
 
-  // Insert CRB-65 into Syndromic Summary
-  const handleInsertCrb65Score = () => {
-    const text = `Score CRB-65 = ${crb65Data.score}/4 [${crb65Data.reasons.join(', ') || 'aucun critère'}] -> ${crb65Data.severity} (${crb65Data.recommendation}).`;
+  // Step 5: Record a new vitals series snapshot
+  const handleRecordVitalsSeries = () => {
+    const v = form12Steps.vitals;
+    const computedBmi = calcBmi(v.weight, v.height) ?? v.bmi;
+    const newEntry: VitalsSeriesEntry = {
+      id: `vs-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      bp: v.bp,
+      pulse: v.pulse,
+      rr: v.rr,
+      spo2Mode: v.spo2Mode || 'AIR_AMBIANT',
+      spo2Ambient: v.spo2Ambient,
+      spo2O2: v.spo2O2,
+      o2FlowLiters: v.o2FlowLiters,
+      o2Device: v.o2Device,
+      fio2: v.fio2,
+      temperature: v.temperature,
+      weight: v.weight,
+      height: v.height,
+      bmi: computedBmi,
+      generalState: v.generalState
+    };
     setForm12Steps(prev => ({
       ...prev,
-      syndromicSummary: prev.syndromicSummary ? `${prev.syndromicSummary} ${text}` : text
+      vitals: { ...prev.vitals, bmi: computedBmi },
+      vitalsSeries: [newEntry, ...(prev.vitalsSeries || [])]
     }));
+
+    // Also feed nursing vital records if patient is currently hospitalized
+    const activeHosp = hospitalizations.find(h => h.patientId === selectedPatient?.id && h.status === 'active');
+    if (activeHosp && selectedPatient) {
+      addNurseVitalRecord({
+        id: `nv-cons-${Date.now()}`,
+        patientId: selectedPatient.id,
+        hospitalizationId: activeHosp.id,
+        centerId: currentCenter?.id || 'center-1',
+        timestamp: newEntry.timestamp,
+        bp: v.bp || '120/80',
+        pulse: Number(v.pulse || 80),
+        rr: Number(v.rr || 18),
+        spo2: Number(v.spo2Mode === 'SOUS_O2' ? (v.spo2O2 || 96) : (v.spo2Ambient || 96)),
+        temperature: Number(v.temperature || 37),
+        consciousnessGlasgow: v.glasgowScore,
+        painEva: v.painEva,
+        nurseName: currentUser?.name || 'Praticien Consultation',
+        notes: v.spo2Mode === 'SOUS_O2'
+          ? `Sous O2 (${v.o2FlowLiters || 0} L/min via ${v.o2Device || 'Lunettes nasales'})`
+          : 'Air ambiant'
+      });
+    }
+
+    setVoiceActionNotice({
+      type: 'success',
+      message: `✓ Série de constantes enregistrée (${new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })})`
+    });
+    setTimeout(() => setVoiceActionNotice(null), 3500);
   };
 
   // Insert PNT 2RHZE dosage directly into prescription
@@ -1559,12 +1763,13 @@ export const Consultations: React.FC = () => {
     }));
   };
 
-  // Save consultation handler
+  // Save consultation handler (+ bidirectional Patient DPI & Explorations sync)
   const handleSaveConsultation = () => {
     if (!selectedPatient) return;
 
+    const consultId = 'c-' + Date.now();
     const newConsult: Consultation = {
-      id: 'c-' + Date.now(),
+      id: consultId,
       centerId: currentCenter?.id || 'center-1',
       patientId: selectedPatient.id,
       patientName: `${selectedPatient.firstName} ${selectedPatient.lastName}`,
@@ -1588,6 +1793,94 @@ export const Consultations: React.FC = () => {
     };
 
     saveConsultation(newConsult);
+
+    // Sync updated civil status and antecedents back to Patient DPI
+    const consumptions = extractConsumptionsFromDpi(dpiAntecedentsValue);
+    const mergedChronic = [
+      ...dpiAntecedentsValue.medicalAntecedents,
+      dpiAntecedentsValue.medicalAntecedentsOther
+    ]
+      .filter(Boolean)
+      .join(', ');
+
+    updatePatient(selectedPatient.id, {
+      maritalStatus: form12Steps.maritalStatus || selectedPatient.maritalStatus,
+      educationLevel: form12Steps.educationLevel || selectedPatient.educationLevel,
+      profession: form12Steps.profession || selectedPatient.profession,
+      emergencyPhone: form12Steps.emergencyPhone || selectedPatient.emergencyPhone,
+      allergies: form12Steps.riskFactors.allergiesAtopy || selectedPatient.allergies,
+      chronicConditions: mergedChronic || selectedPatient.chronicConditions,
+      medicalAntecedents: {
+        selected: dpiAntecedentsValue.medicalAntecedents,
+        other: dpiAntecedentsValue.medicalAntecedentsOther
+      },
+      smokingHistory: {
+        isSmoker: dpiAntecedentsValue.smokingStatus !== 'JAMAIS',
+        status: dpiAntecedentsValue.smokingStatus,
+        cigarettesPerDay: dpiAntecedentsValue.cigarettesPerDay,
+        durationYears: dpiAntecedentsValue.smokingDurationYears,
+        stoppedYear: dpiAntecedentsValue.smokingStoppedYear,
+        packYears: dpiAntecedentsValue.smokingPackYears,
+        periods: dpiAntecedentsValue.smokingPeriods,
+        biomassExposure: dpiAntecedentsValue.biomassExposure,
+        passiveSmoking: dpiAntecedentsValue.passiveSmoking
+      },
+      consumptions,
+      occupationalExposures: dpiAntecedentsValue.occupationalProfile,
+      surgicalHistory: dpiAntecedentsValue.surgicalHistory,
+      obgynHistory: dpiAntecedentsValue.obgynHistory
+    });
+
+    // Sync any detailed ordered paraclinical exams not yet saved to central explorations
+    const detailedExams = form12Steps.paraclinicalOrdered.orderedExamsDetailed || [];
+    for (const exam of detailedExams) {
+      if (!exam.linkedExplorationId) {
+        const expId = `exp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        const statusMap: Record<OrderedParaclinicalExam['status'], MedicalExploration['status']> = {
+          PRESCRIT: 'REQUESTED',
+          EN_ATTENTE: 'IN_PROGRESS',
+          REALISE: 'VALIDATED'
+        };
+        const macroCat = PARACLINICAL_CATALOG.find(c => c.id === exam.macroCategory);
+        const subCatObj = macroCat?.subCategories.find(sc => sc.label === exam.subCategory) || macroCat?.subCategories[0];
+        saveMedicalExploration({
+          id: expId,
+          requestNumber: `EXP-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
+          patientId: selectedPatient.id,
+          patientName: `${selectedPatient.firstName} ${selectedPatient.lastName}`,
+          patientHospitalNumber: selectedPatient.hospitalNumber,
+          patientAge: selectedPatient.age,
+          patientGender: selectedPatient.gender,
+          centerId: currentCenter?.id || 'center-1',
+          consultationId: consultId,
+          category: subCatObj?.explorationCategory || 'AUTRES',
+          macroCategory: exam.macroCategory,
+          subCategory: exam.subCategory,
+          title: exam.examName,
+          clinicalIndication: form12Steps.chiefComplaint || 'Demande issue de consultation DPI',
+          priority: 'NORMALE',
+          status: statusMap[exam.status],
+          simpleStatus: exam.status,
+          date: exam.prescribedDate || new Date().toISOString().split('T')[0],
+          prescribedDate: exam.prescribedDate,
+          realizationDate: exam.realizedDate,
+          requestedAt: new Date().toISOString(),
+          prescribedById: currentUser?.id || 'doc-1',
+          prescribedByName: currentUser?.name || 'Dr. Cheikh Ndao',
+          laboratoryDestination: macroCat?.defaultLab || 'Plateau Technique CHREIN',
+          sourceType: exam.attachmentType || 'SAISIE_DIRECTE',
+          fileUrl: exam.attachmentUrl,
+          attachmentName: exam.attachmentName,
+          extractedParameters: [],
+          spirometryData: exam.spirometryData,
+          narrativeReport: exam.resultsText,
+          followUpResults: exam.followUpEntries,
+          validated: exam.status === 'REALISE',
+          createdAt: new Date().toISOString()
+        });
+      }
+    }
+
     setSaveSuccessMsg(true);
     setTimeout(() => setSaveSuccessMsg(false), 3500);
   };
@@ -1609,13 +1902,41 @@ export const Consultations: React.FC = () => {
     if (selectedPatient?.id) set.add(1);
     if (form12Steps.chiefComplaint && form12Steps.chiefComplaint.trim().length > 3) set.add(2);
     if (form12Steps.historyOfIllness && form12Steps.historyOfIllness.trim().length > 10) set.add(3);
-    if (form12Steps.antecedentsText || form12Steps.riskFactors.smokingPA > 0 || form12Steps.riskFactors.tbContact || form12Steps.riskFactors.biomassExposure) set.add(4);
-    if (form12Steps.vitals.bp && form12Steps.vitals.pulse && form12Steps.vitals.spo2Ambient && form12Steps.vitals.rr) set.add(5);
+    if (
+      form12Steps.antecedentsText ||
+      form12Steps.riskFactors.smokingPA > 0 ||
+      form12Steps.riskFactors.tbContact ||
+      form12Steps.riskFactors.biomassExposure ||
+      (form12Steps.riskFactors.medicalAntecedents?.length || 0) > 0 ||
+      (form12Steps.riskFactors.surgicalHistory?.length || 0) > 0
+    ) {
+      set.add(4);
+    }
+    if (
+      form12Steps.vitals.bp &&
+      form12Steps.vitals.pulse &&
+      (form12Steps.vitals.spo2Ambient || form12Steps.vitals.spo2O2) &&
+      form12Steps.vitals.rr
+    ) {
+      set.add(5);
+    }
     if (form12Steps.systems.pulmonaryVesicularBreath && form12Steps.systems.cardiovascular) set.add(6);
     if (form12Steps.syndromicSummary && form12Steps.syndromicSummary.trim().length > 10) set.add(7);
     if (form12Steps.diagnosticHypotheses.length > 0 && Boolean(form12Steps.diagnosticHypotheses[0]?.trim())) set.add(8);
     const p = form12Steps.paraclinicalOrdered;
-    if (p.geneXpertBK || p.chestXray || p.bloodGas || p.nfsCrp || p.chestCT || p.spirometry || p.pleuralPuncture || p.otherNotes) set.add(9);
+    if (
+      p.geneXpertBK ||
+      p.chestXray ||
+      p.bloodGas ||
+      p.nfsCrp ||
+      p.chestCT ||
+      p.spirometry ||
+      p.pleuralPuncture ||
+      p.otherNotes ||
+      (p.orderedExamsDetailed?.length || 0) > 0
+    ) {
+      set.add(9);
+    }
     if (form12Steps.diagnoses.length > 0) set.add(10);
     if (form12Steps.managementPlan.medicationsPrescribed && form12Steps.managementPlan.medicationsPrescribed.trim().length > 5) set.add(11);
     if (form12Steps.managementPlan.orientation && form12Steps.followUp.nextAppointmentDate) set.add(12);
@@ -1650,11 +1971,23 @@ export const Consultations: React.FC = () => {
   // Reset consultation
   const handleResetConsultation = () => {
     setActiveScenarioId(null);
+    setSelectedMmrcGrade(null);
+    setActiveInlineScoreId(null);
     setForm12Steps({
+      maritalStatus: selectedPatient?.maritalStatus || 'Non renseigné',
+      educationLevel: selectedPatient?.educationLevel || 'Non renseigné',
+      profession: selectedPatient?.profession || '',
+      emergencyPhone: selectedPatient?.emergencyPhone || selectedPatient?.phone || '',
       civilStatusNotes: '',
       chiefComplaint: '',
       historyOfIllness: '',
+      mmrcGrade: undefined,
       riskFactors: {
+        smokingStatus: 'JAMAIS',
+        cigarettesPerDay: 0,
+        smokingDurationYears: 0,
+        smokingStoppedYear: '',
+        smokingPeriods: [],
         smokingPA: 0,
         biomassExposure: false,
         tbContact: false,
@@ -1662,16 +1995,23 @@ export const Consultations: React.FC = () => {
         previousTB: false,
         hivStatus: 'NEGATIF',
         diabetesHta: '',
-        occupationalExposure: ''
+        occupationalExposure: '',
+        medicalAntecedents: [],
+        medicalAntecedentsOther: '',
+        surgicalHistory: [],
+        obgynHistory: {}
       },
       antecedentsText: '',
       vitals: {
         bp: '',
         pulse: 0,
         rr: 0,
+        spo2Mode: 'AIR_AMBIANT',
         spo2Ambient: 0,
         spo2O2: 0,
         o2FlowLiters: 0,
+        o2Device: 'Lunettes nasales',
+        fio2: undefined,
         temperature: 0,
         weight: 0,
         height: 0,
@@ -1680,6 +2020,7 @@ export const Consultations: React.FC = () => {
         painEva: 0,
         generalState: 'BON'
       },
+      vitalsSeries: [],
       systems: {
         pulmonaryVesicularBreath: 'Murmure vésiculaire (conservé et pur bilatéral)',
         pulmonaryCrackles: 'Râles crépitants (absents)',
@@ -1693,6 +2034,9 @@ export const Consultations: React.FC = () => {
         entLymphNodes: '(Pas d\'adénopathie palpable)',
         cutaneous: '(Peau saine, pas de sueurs ni purpura)'
       },
+      syndromicSelectedAntecedents: [],
+      syndromicIntro: '',
+      syndromicItems: [],
       syndromicSummary: '',
       diagnosticHypotheses: [],
       paraclinicalOrdered: {
@@ -1703,7 +2047,8 @@ export const Consultations: React.FC = () => {
         nfsCrp: false,
         geneXpertBK: false,
         pleuralPuncture: false,
-        otherNotes: ''
+        otherNotes: '',
+        orderedExamsDetailed: []
       },
       diagnoses: [],
       managementPlan: {
@@ -1815,55 +2160,242 @@ export const Consultations: React.FC = () => {
     }));
   };
 
-  // Step 7: Auto-generate Syndromic Summary
-  const handleAutoGenerateSyndromicSummary = () => {
-    const parts: string[] = [];
-    const age = selectedPatient?.age ? `Patient(e) de ${selectedPatient.age} ans` : 'Patient(e)';
-    const chief = form12Steps.chiefComplaint ? `venu pour « ${form12Steps.chiefComplaint.slice(0, 80)} »` : '';
-    parts.push(`${age} ${chief}.`);
+  // Step 7: Build structured intro & ordered syndromic summary
+  const buildSyndromicIntroTemplate = (selectedAntecedents?: string[]) => {
+    const ageLabel = selectedPatient?.age ? `${selectedPatient.age}` : '__';
+    const sexLabel = selectedPatient?.gender === 'F' ? 'féminin' : 'masculin';
+    const selectedList = selectedAntecedents ?? form12Steps.syndromicSelectedAntecedents ?? dpiAntecedentsValue.medicalAntecedents ?? [];
+    const antLabel = selectedList.length > 0 ? selectedList.join(', ') : (form12Steps.antecedentsText || 'sans antécédent notable');
+    const motifLabel = (form12Steps.chiefComplaint || '[motif principal]').trim();
+    return `Patient de ${ageLabel} ans, de sexe ${sexLabel}, aux antécédents de ${antLabel}, hospitalisé pour ${motifLabel}. L'examen clinique permet de retenir les syndromes suivants, classés par ordre de gravité et de priorité clinique :`;
+  };
 
-    const signs: string[] = [];
-    if (form12Steps.systems.pulmonaryCrackles && !form12Steps.systems.pulmonaryCrackles.includes('absent')) {
-      signs.push(form12Steps.systems.pulmonaryCrackles);
-    }
-    if (form12Steps.systems.pulmonaryWheezes && !form12Steps.systems.pulmonaryWheezes.includes('absent')) {
-      signs.push(form12Steps.systems.pulmonaryWheezes);
-    }
-    if (form12Steps.systems.pulmonaryVesicularBreath && !form12Steps.systems.pulmonaryVesicularBreath.includes('conservé')) {
-      signs.push(form12Steps.systems.pulmonaryVesicularBreath);
-    }
-    if (form12Steps.systems.pleuralFriction && !form12Steps.systems.pleuralFriction.includes('absent') && !form12Steps.systems.pleuralFriction.includes('négatif')) {
-      signs.push(form12Steps.systems.pleuralFriction);
-    }
+  const syncSyndromicSummaryText = (intro: string, items: SyndromicPriorityItem[]) => {
+    if (items.length === 0) return intro;
+    const numbered = items.map((it, idx) => `${idx + 1}. ${it.text}${it.severity ? ` [${it.severity}]` : ''}`).join('\n');
+    return `${intro}\n${numbered}`;
+  };
 
-    if (signs.length > 0) {
-      parts.push(`Auscultation : ${signs.join(' ; ')}.`);
-    } else {
-      parts.push(`Auscultation pulmonaire sans anomalie focale ni râle surajouté.`);
-    }
-
-    const vitalsText: string[] = [];
-    if (form12Steps.vitals.spo2Ambient) vitalsText.push(`SpO2 ${form12Steps.vitals.spo2Ambient}%`);
-    if (form12Steps.vitals.rr) vitalsText.push(`FR ${form12Steps.vitals.rr}/min`);
-    if (form12Steps.vitals.temperature && form12Steps.vitals.temperature >= 38) vitalsText.push(`Fièvre ${form12Steps.vitals.temperature}°C`);
-    if (form12Steps.vitals.bp) vitalsText.push(`TA ${form12Steps.vitals.bp}`);
-    if (vitalsText.length > 0) {
-      parts.push(`Constantes : ${vitalsText.join(', ')}.`);
-    }
-
-    const terrain: string[] = [];
-    if (form12Steps.riskFactors.smokingPA > 0) terrain.push(`tabac ${form12Steps.riskFactors.smokingPA} PA`);
-    if (form12Steps.riskFactors.tbContact) terrain.push('contage tuberculeux');
-    if (form12Steps.riskFactors.biomassExposure) terrain.push('exposition biomasse');
-    if (terrain.length > 0) {
-      parts.push(`Terrain : ${terrain.join(', ')}.`);
-    }
-
-    const generated = parts.join(' ');
+  const handleToggleSyndromicAntecedent = (ant: string) => {
+    const current = form12Steps.syndromicSelectedAntecedents || [];
+    const next = current.includes(ant) ? current.filter(x => x !== ant) : [...current, ant];
+    const intro = buildSyndromicIntroTemplate(next);
+    const items = form12Steps.syndromicItems || [];
     setForm12Steps(prev => ({
       ...prev,
-      syndromicSummary: generated
+      syndromicSelectedAntecedents: next,
+      syndromicIntro: intro,
+      syndromicSummary: syncSyndromicSummaryText(intro, items)
     }));
+  };
+
+  const handleAddSyndromicItem = (textArg?: string, severityArg?: 'CRITIQUE' | 'MAJEUR' | 'MODERE') => {
+    const clean = (textArg ?? newSyndromeText).trim();
+    if (!clean) return;
+    const newItem: SyndromicPriorityItem = {
+      id: `syn-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      text: clean,
+      severity: severityArg ?? newSyndromeSeverity
+    };
+    const nextItems = [...(form12Steps.syndromicItems || []), newItem];
+    const intro = form12Steps.syndromicIntro || buildSyndromicIntroTemplate();
+    setForm12Steps(prev => ({
+      ...prev,
+      syndromicIntro: intro,
+      syndromicItems: nextItems,
+      syndromicSummary: syncSyndromicSummaryText(intro, nextItems)
+    }));
+    if (!textArg) setNewSyndromeText('');
+  };
+
+  const handleMoveSyndromicItem = (idx: number, direction: -1 | 1) => {
+    const items = [...(form12Steps.syndromicItems || [])];
+    const target = idx + direction;
+    if (target < 0 || target >= items.length) return;
+    const [moved] = items.splice(idx, 1);
+    items.splice(target, 0, moved);
+    const intro = form12Steps.syndromicIntro || buildSyndromicIntroTemplate();
+    setForm12Steps(prev => ({
+      ...prev,
+      syndromicItems: items,
+      syndromicSummary: syncSyndromicSummaryText(intro, items)
+    }));
+  };
+
+  const handleRemoveSyndromicItem = (id: string) => {
+    const nextItems = (form12Steps.syndromicItems || []).filter(it => it.id !== id);
+    const intro = form12Steps.syndromicIntro || buildSyndromicIntroTemplate();
+    setForm12Steps(prev => ({
+      ...prev,
+      syndromicItems: nextItems,
+      syndromicSummary: syncSyndromicSummaryText(intro, nextItems)
+    }));
+  };
+
+  // Step 7: Auto-generate Syndromic Summary using exact DPI template
+  const handleAutoGenerateSyndromicSummary = () => {
+    const intro = buildSyndromicIntroTemplate();
+    const detectedItems: SyndromicPriorityItem[] = [];
+
+    const effSpo2 = form12Steps.vitals.spo2Mode === 'SOUS_O2'
+      ? form12Steps.vitals.spo2O2
+      : form12Steps.vitals.spo2Ambient;
+    if ((effSpo2 && effSpo2 < 92) || (form12Steps.vitals.rr && form12Steps.vitals.rr >= 26)) {
+      detectedItems.push({
+        id: `syn-resp-${Date.now()}`,
+        text: `Syndrome de détresse respiratoire / hypoxémie (SpO2 ${effSpo2 || '--'}%, FR ${form12Steps.vitals.rr || '--'}/min)`,
+        severity: 'CRITIQUE'
+      });
+    }
+    if (form12Steps.systems.pulmonaryCrackles && !form12Steps.systems.pulmonaryCrackles.toLowerCase().includes('absent')) {
+      detectedItems.push({
+        id: `syn-cond-${Date.now() + 1}`,
+        text: `Syndrome de condensation pulmonaire (${form12Steps.systems.pulmonaryCrackles})`,
+        severity: 'MAJEUR'
+      });
+    }
+    if (form12Steps.systems.pulmonaryWheezes && !form12Steps.systems.pulmonaryWheezes.toLowerCase().includes('absent')) {
+      detectedItems.push({
+        id: `syn-obstr-${Date.now() + 2}`,
+        text: `Syndrome bronchique obstructif (${form12Steps.systems.pulmonaryWheezes})`,
+        severity: 'MAJEUR'
+      });
+    }
+    if (form12Steps.systems.pleuralFriction && !form12Steps.systems.pleuralFriction.toLowerCase().includes('absent') && !form12Steps.systems.pleuralFriction.toLowerCase().includes('négatif')) {
+      detectedItems.push({
+        id: `syn-pleur-${Date.now() + 3}`,
+        text: `Syndrome pleural (${form12Steps.systems.pleuralFriction})`,
+        severity: 'MAJEUR'
+      });
+    }
+    if (form12Steps.vitals.temperature && form12Steps.vitals.temperature >= 38) {
+      detectedItems.push({
+        id: `syn-inf-${Date.now() + 4}`,
+        text: `Syndrome infectieux fébrile (T° = ${form12Steps.vitals.temperature}°C)`,
+        severity: 'MODERE'
+      });
+    }
+    if (detectedItems.length === 0) {
+      detectedItems.push({
+        id: `syn-gen-${Date.now()}`,
+        text: 'Syndrome respiratoire subaigu à explorer',
+        severity: 'MODERE'
+      });
+    }
+
+    setForm12Steps(prev => ({
+      ...prev,
+      syndromicIntro: intro,
+      syndromicItems: detectedItems,
+      syndromicSummary: syncSyndromicSummaryText(intro, detectedItems)
+    }));
+  };
+
+  // Step 9 helpers: Ordered exams A-F
+  const handleAddDetailedExam = (macroCat: MacroExplorationCategoryId, subCategory: string, examName: string) => {
+    const newExam: OrderedParaclinicalExam = {
+      id: `ord-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      macroCategory: macroCat,
+      subCategory,
+      examName,
+      status: 'PRESCRIT',
+      prescribedDate: new Date().toISOString().split('T')[0],
+      resultsText: '',
+      followUpEntries: []
+    };
+    setForm12Steps(prev => {
+      const existing = prev.paraclinicalOrdered.orderedExamsDetailed || [];
+      return {
+        ...prev,
+        paraclinicalOrdered: {
+          ...prev.paraclinicalOrdered,
+          orderedExamsDetailed: [newExam, ...existing]
+        }
+      };
+    });
+  };
+
+  const handleUpdateDetailedExam = (examId: string, patch: Partial<OrderedParaclinicalExam>) => {
+    setForm12Steps(prev => ({
+      ...prev,
+      paraclinicalOrdered: {
+        ...prev.paraclinicalOrdered,
+        orderedExamsDetailed: (prev.paraclinicalOrdered.orderedExamsDetailed || []).map(ex =>
+          ex.id === examId ? { ...ex, ...patch } : ex
+        )
+      }
+    }));
+  };
+
+  const handleRemoveDetailedExam = (examId: string) => {
+    setForm12Steps(prev => ({
+      ...prev,
+      paraclinicalOrdered: {
+        ...prev.paraclinicalOrdered,
+        orderedExamsDetailed: (prev.paraclinicalOrdered.orderedExamsDetailed || []).filter(ex => ex.id !== examId)
+      }
+    }));
+  };
+
+  const handleExamAttachmentUpload = (examId: string, file: File) => {
+    const ext = file.name.toLowerCase();
+    const attachmentType: 'PHOTO' | 'PDF' | 'DICOM' = ext.endsWith('.pdf')
+      ? 'PDF'
+      : (ext.endsWith('.dcm') || ext.endsWith('.dicom'))
+      ? 'DICOM'
+      : 'PHOTO';
+    const reader = new FileReader();
+    reader.onload = () => {
+      handleUpdateDetailedExam(examId, {
+        attachmentName: file.name,
+        attachmentType,
+        attachmentUrl: typeof reader.result === 'string' ? reader.result : undefined
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Contextual Score Launcher & Saver (used after Step 8 Hypothèses and in Step 10)
+  const openInlineScore = (scoreId: ClinicalScoreCalculation['scoreId']) => {
+    setActiveInlineScoreId(scoreId);
+    setInlineScoreInputs(
+      buildAutoFilledScoreInputs(scoreId, selectedPatient, form12Steps, patientExplorations)
+    );
+    setInlineScoreSavedMsg(null);
+  };
+
+  const activeScoreDef = useMemo(
+    () => CLINICAL_SCORES_DEFINITIONS.find(s => s.id === activeInlineScoreId) || null,
+    [activeInlineScoreId]
+  );
+
+  const activeScoreResult = useMemo(() => {
+    if (!activeScoreDef) return null;
+    return activeScoreDef.calculate(inlineScoreInputs);
+  }, [activeScoreDef, inlineScoreInputs]);
+
+  const handleSaveInlineScore = () => {
+    if (!activeScoreDef || !activeScoreResult || !selectedPatient) return;
+    saveClinicalScoreCalculation({
+      id: `score-${Date.now()}`,
+      patientId: selectedPatient.id,
+      patientName: `${selectedPatient.firstName} ${selectedPatient.lastName}`,
+      centerId: currentCenter?.id || 'center-1',
+      doctorId: currentUser?.id || 'doc-1',
+      doctorName: currentUser?.name || 'Dr. Cheikh Ndao',
+      scoreId: activeScoreDef.id,
+      scoreName: activeScoreDef.name,
+      scoreCategory: activeScoreDef.category,
+      calculatedValue: activeScoreResult.value,
+      variables: inlineScoreInputs,
+      missingVariables: activeScoreResult.missing,
+      interpretation: activeScoreResult.interpretation,
+      clinicalRecommendation: activeScoreResult.recommendation,
+      referenceSource: activeScoreDef.reference,
+      date: new Date().toISOString().split('T')[0]
+    });
+    setInlineScoreSavedMsg(`✓ ${activeScoreDef.name} (${activeScoreResult.value}) enregistré dans le DPI du patient.`);
+    setTimeout(() => setInlineScoreSavedMsg(null), 4500);
   };
 
   // Step 9: Apply Exam Pack
@@ -1895,6 +2427,248 @@ export const Consultations: React.FC = () => {
     }));
   };
 
+  // Shared Contextual Clinical Scores UI (used after Step 8 Hypothèses & in Step 10 Diagnostics)
+  const renderContextualClinicalScores = () => {
+    const suggestedGroups = getSuggestedScoresForHypotheses(
+      form12Steps.diagnosticHypotheses,
+      form12Steps.diagnoses
+    );
+    const filteredOtherScores = CLINICAL_SCORES_DEFINITIONS.filter(s => {
+      const q = inlineScoreSearch.trim().toLowerCase();
+      if (!q) return false;
+      return (
+        s.name.toLowerCase().includes(q) ||
+        s.categoryLabel.toLowerCase().includes(q) ||
+        s.shortDesc.toLowerCase().includes(q)
+      );
+    });
+
+    return (
+      <div className="p-4 bg-gradient-to-br from-slate-50 to-teal-50/40 rounded-xl border border-teal-200 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Calculator className="w-4 h-4 text-teal-700" />
+            <div>
+              <span className="text-xs font-black text-slate-900 block">
+                Scores Cliniques & Pronostiques Contextuels (Pré-remplis depuis le DPI)
+              </span>
+              <span className="text-[10px] text-slate-500">
+                Proposés automatiquement selon vos hypothèses et diagnostics (PAC, EP, BPCO, Asthme, Sepsis, TB)
+              </span>
+            </div>
+          </div>
+
+          <div className="relative w-full sm:w-64">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+            <input
+              type="text"
+              value={inlineScoreSearch}
+              onChange={(e) => setInlineScoreSearch(e.target.value)}
+              placeholder="Rechercher un score (CURB-65, Wells, BODE...)"
+              className="w-full text-[11px] bg-white border border-slate-200 rounded-lg pl-8 pr-2.5 py-1.5 focus:outline-teal-600"
+            />
+          </div>
+        </div>
+
+        {/* Suggested Groups */}
+        {suggestedGroups.length > 0 ? (
+          <div className="space-y-2">
+            {suggestedGroups.map(group => (
+              <div key={group.pathologyLabel} className="p-2.5 bg-white rounded-lg border border-slate-200 space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded border ${group.badgeColor}`}>
+                    {group.pathologyLabel}
+                  </span>
+                  <span className="text-[10px] text-slate-400">Scores recommandés :</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {group.scoreIds.map(sid => {
+                    const def = CLINICAL_SCORES_DEFINITIONS.find(d => d.id === sid);
+                    if (!def) return null;
+                    const isOpen = activeInlineScoreId === sid;
+                    return (
+                      <button
+                        key={sid}
+                        type="button"
+                        onClick={() => openInlineScore(sid)}
+                        className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border transition cursor-pointer flex items-center gap-1 ${
+                          isOpen
+                            ? 'bg-teal-700 text-white border-teal-800 shadow-xs'
+                            : 'bg-teal-50/70 hover:bg-teal-100 text-teal-900 border-teal-200'
+                        }`}
+                      >
+                        <Calculator className="w-3 h-3" />
+                        <span>{def.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-[11px] text-slate-500 italic bg-white/80 p-2.5 rounded-lg border border-slate-200">
+            Ajoutez une hypothèse (ex: Pneumonie PAC, Embolie pulmonaire, BPCO, Asthme, Sepsis, Tuberculose) ou recherchez un score ci-dessus pour l'ouvrir avec pré-remplissage automatique.
+          </p>
+        )}
+
+        {/* Search results */}
+        {filteredOtherScores.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 p-2 bg-white rounded-lg border border-slate-200">
+            <span className="text-[10px] font-bold text-slate-500 uppercase w-full">Résultats de recherche :</span>
+            {filteredOtherScores.map(def => (
+              <button
+                key={def.id}
+                type="button"
+                onClick={() => openInlineScore(def.id)}
+                className={`text-[11px] font-bold px-2.5 py-1 rounded-lg border transition cursor-pointer ${
+                  activeInlineScoreId === def.id
+                    ? 'bg-teal-700 text-white border-teal-800'
+                    : 'bg-slate-50 hover:bg-teal-50 text-slate-800 border-slate-200'
+                }`}
+              >
+                {def.name}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Inline Calculator Drawer */}
+        {activeScoreDef && activeScoreResult && (
+          <div className="p-3.5 bg-white rounded-xl border-2 border-teal-300 shadow-xs space-y-3">
+            <div className="flex items-start justify-between gap-2 border-b border-slate-100 pb-2">
+              <div>
+                <h4 className="text-xs font-black text-teal-950">{activeScoreDef.name}</h4>
+                <p className="text-[10px] text-slate-500">{activeScoreDef.shortDesc} — <em>{activeScoreDef.reference}</em></p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveInlineScoreId(null)}
+                className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+                title="Fermer le calculateur"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {activeScoreResult.missing.length > 0 && (
+              <div className="text-[11px] bg-amber-50 border border-amber-200 text-amber-900 px-3 py-1.5 rounded-lg flex items-center gap-2">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                <span>
+                  Données manquantes à compléter ({activeScoreResult.missing.length}) :{' '}
+                  <strong>{activeScoreResult.missing.join(', ')}</strong>
+                </span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+              {activeScoreDef.fields.map(field => {
+                const isMissing = activeScoreResult.missing.includes(field.key);
+                const val = inlineScoreInputs[field.key];
+                if (field.type === 'boolean') {
+                  return (
+                    <label
+                      key={field.key}
+                      className={`flex items-center gap-2 p-2 rounded-lg border cursor-pointer transition ${
+                        val
+                          ? 'bg-teal-50 border-teal-300 text-teal-950 font-bold'
+                          : isMissing
+                          ? 'bg-amber-50/60 border-amber-300 text-slate-800'
+                          : 'bg-slate-50 border-slate-200 text-slate-700'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={Boolean(val)}
+                        onChange={(e) => setInlineScoreInputs(prev => ({ ...prev, [field.key]: e.target.checked }))}
+                        className="h-3.5 w-3.5 text-teal-600 rounded"
+                      />
+                      <span className="text-[11px]">{field.label}</span>
+                    </label>
+                  );
+                }
+                if (field.type === 'select') {
+                  return (
+                    <div key={field.key} className={`p-2 rounded-lg border ${isMissing ? 'bg-amber-50/50 border-amber-300' : 'bg-slate-50 border-slate-200'}`}>
+                      <label className="text-[10px] font-bold text-slate-700 block mb-1">{field.label}</label>
+                      <select
+                        value={val ?? ''}
+                        onChange={(e) => setInlineScoreInputs(prev => ({ ...prev, [field.key]: e.target.value }))}
+                        className="w-full text-[11px] bg-white border border-slate-200 rounded-md p-1.5 font-medium"
+                      >
+                        <option value="">-- Sélectionner --</option>
+                        {field.options?.map(opt => (
+                          <option key={String(opt.value)} value={opt.value}>{opt.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                }
+                return (
+                  <div key={field.key} className={`p-2 rounded-lg border ${isMissing ? 'bg-amber-50/50 border-amber-300' : 'bg-slate-50 border-slate-200'}`}>
+                    <label className="text-[10px] font-bold text-slate-700 block mb-1">
+                      {field.label} {field.unit ? `(${field.unit})` : ''}
+                    </label>
+                    <input
+                      type="number"
+                      value={val ?? ''}
+                      placeholder={field.placeholder || ''}
+                      onChange={(e) => setInlineScoreInputs(prev => ({
+                        ...prev,
+                        [field.key]: e.target.value === '' ? '' : Number(e.target.value)
+                      }))}
+                      className="w-full text-[11px] bg-white border border-slate-200 rounded-md p-1.5 font-mono font-bold"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="space-y-0.5 text-[11px]">
+                <div>
+                  <span className="font-black text-teal-800 text-xs mr-2">Résultat : {activeScoreResult.value}</span>
+                  <span className="font-semibold text-slate-800">{activeScoreResult.interpretation}</span>
+                </div>
+                <p className="text-slate-600">{activeScoreResult.recommendation}</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleSaveInlineScore}
+                className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-[11px] font-bold cursor-pointer shrink-0 flex items-center gap-1"
+              >
+                <BookmarkCheck className="w-3.5 h-3.5" />
+                <span>Valider & Enregistrer dans le DPI</span>
+              </button>
+            </div>
+
+            {inlineScoreSavedMsg && (
+              <div className="text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-lg">
+                {inlineScoreSavedMsg}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Recorded scores for this patient */}
+        {patientScoresToday.length > 0 && (
+          <div className="pt-2 border-t border-teal-200/70 space-y-1">
+            <span className="text-[10px] font-extrabold uppercase text-slate-500">
+              Scores enregistrés dans le DPI ({patientScoresToday.length}) :
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {patientScoresToday.slice(0, 6).map(sc => (
+                <span key={sc.id} className="text-[10px] bg-white border border-slate-200 px-2 py-0.5 rounded-md font-medium text-slate-700">
+                  <strong>{sc.scoreName}</strong> : {sc.calculatedValue} ({sc.date})
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-4">
       {/* 1. Integrated Patient Banner & Clinical Workstation Header */}
@@ -1903,7 +2677,7 @@ export const Consultations: React.FC = () => {
           {/* Patient Profile & Clinical Badges */}
           <div className="flex items-start sm:items-center gap-3.5">
             <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-teal-600 to-teal-800 text-white font-black text-lg flex items-center justify-center shrink-0 shadow-xs">
-              {selectedPatient ? `${selectedPatient.firstName[0]}${selectedPatient.lastName[0]}`.toUpperCase() : 'P'}
+              {selectedPatient ? `${selectedPatient.firstName?.[0] || 'P'}${selectedPatient.lastName?.[0] || ''}`.toUpperCase() : 'P'}
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2">
@@ -2681,77 +3455,122 @@ export const Consultations: React.FC = () => {
                   <h3 className="text-sm font-black text-slate-800">
                     1) État Civil, Identification & Contexte Social
                   </h3>
-                <span className="text-xxs font-mono font-bold text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                  N° IP : {selectedPatient?.code}
-                </span>
-              </div>
+                  <span className="text-xxs font-mono font-bold text-teal-700 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
+                    N° IP : {selectedPatient?.code}
+                  </span>
+                </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-xs bg-slate-50/70 p-4 rounded-xl border border-slate-200">
-                <div>
-                  <span className="text-slate-400 block text-xxs font-bold uppercase">Nom & Prénom</span>
-                  <span className="font-extrabold text-slate-800 text-sm">{selectedPatient?.firstName} {selectedPatient?.lastName}</span>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-xs bg-slate-50/70 p-4 rounded-xl border border-slate-200">
+                  <div>
+                    <span className="text-slate-400 block text-xxs font-bold uppercase">Nom & Prénom</span>
+                    <span className="font-extrabold text-slate-800 text-sm">{selectedPatient?.firstName} {selectedPatient?.lastName}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-xxs font-bold uppercase">N° Dossier / Hospitalier</span>
+                    <span className="font-mono font-bold text-slate-800">{selectedPatient?.hospitalNumber || selectedPatient?.code || 'CHREIN-2026-N/A'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-xxs font-bold uppercase">Âge & Sexe</span>
+                    <span className="font-bold text-slate-800">{selectedPatient?.age} ans • {selectedPatient?.gender === 'M' ? 'Masculin' : 'Féminin'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-xxs font-bold uppercase">Adresse & Quartier</span>
+                    <span className="font-bold text-slate-800">{selectedPatient?.address || 'Kaolack'}</span>
+                  </div>
+                  <div>
+                    <label className="text-slate-500 block text-xxs font-bold uppercase mb-1">Profession</label>
+                    <input
+                      type="text"
+                      value={form12Steps.profession ?? selectedPatient?.profession ?? ''}
+                      onChange={(e) => setForm12Steps(prev => ({ ...prev, profession: e.target.value }))}
+                      placeholder="Ex: Cultivateur, Commerçant..."
+                      className="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 font-semibold text-slate-800"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-500 block text-xxs font-bold uppercase mb-1">Téléphone d'urgence</label>
+                    <input
+                      type="text"
+                      value={form12Steps.emergencyPhone ?? selectedPatient?.emergencyPhone ?? selectedPatient?.phone ?? ''}
+                      onChange={(e) => setForm12Steps(prev => ({ ...prev, emergencyPhone: e.target.value }))}
+                      placeholder="77 000 00 00"
+                      className="w-full text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 font-mono font-semibold text-slate-800"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <span className="text-slate-400 block text-xxs font-bold uppercase">N° Hospitalier CHREIN</span>
-                  <span className="font-mono font-bold text-slate-800">{selectedPatient?.hospitalNumber || 'CHREIN-2026-N/A'}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-xxs font-bold uppercase">Âge & Sexe</span>
-                  <span className="font-bold text-slate-800">{selectedPatient?.age} ans • {selectedPatient?.gender === 'M' ? 'Masculin' : 'Féminin'}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-xxs font-bold uppercase">Adresse & Quartier</span>
-                  <span className="font-bold text-slate-800">{selectedPatient?.address || 'Kaolack'}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-xxs font-bold uppercase">Profession / Exposition</span>
-                  <span className="font-bold text-slate-800">{selectedPatient?.profession || 'Agriculteur / Commerçant'}</span>
-                </div>
-                <div>
-                  <span className="text-slate-400 block text-xxs font-bold uppercase">Contact d'urgence</span>
-                  <span className="font-mono text-slate-800">{selectedPatient?.emergencyPhone || selectedPatient?.phone}</span>
-                </div>
-              </div>
 
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xxs font-bold text-slate-600 block">
-                    Notes contextuelles & conditions de vie (logement, promiscuité, foyer familial)
-                  </label>
-                  <span className="text-[10px] text-teal-700 font-bold">Raccourcis 1-clic :</span>
-                </div>
-                <div className="flex flex-wrap gap-1.5 mb-2">
-                  {[
-                    'Habitat collectif / promiscuité (foyer > 6 personnes)',
-                    'Cuisine intérieure au feu de bois / biomasse',
-                    'Contage tuberculeux intrafamilial documenté',
-                    'Absence de contage respiratoire connu',
-                    'Habitat aéré, bonne ventilation naturelle',
-                    'Exposition poussières de battage / chantiers'
-                  ].map(chip => (
-                    <button
-                      key={chip}
-                      type="button"
-                      onClick={() => setForm12Steps(prev => ({
-                        ...prev,
-                        civilStatusNotes: prev.civilStatusNotes ? `${prev.civilStatusNotes}. ${chip}` : chip
-                      }))}
-                      className="text-[10px] font-medium bg-slate-100 hover:bg-teal-50 hover:text-teal-800 text-slate-700 px-2 py-0.5 rounded-md border border-slate-200 transition cursor-pointer"
+                {/* Situation Matrimoniale & Niveau d'Études (Choix unique) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white p-3.5 rounded-xl border border-slate-200">
+                  <div>
+                    <label className="text-xxs font-extrabold text-slate-700 uppercase block mb-1">
+                      Situation Matrimoniale
+                    </label>
+                    <select
+                      value={form12Steps.maritalStatus || 'Non renseigné'}
+                      onChange={(e) => setForm12Steps(prev => ({ ...prev, maritalStatus: e.target.value as MaritalStatus }))}
+                      className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-800 focus:outline-teal-600"
                     >
-                      + {chip}
-                    </button>
-                  ))}
+                      {MARITAL_STATUS_OPTIONS.map(opt => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xxs font-extrabold text-slate-700 uppercase block mb-1">
+                      Niveau d'Études
+                    </label>
+                    <select
+                      value={form12Steps.educationLevel || 'Non renseigné'}
+                      onChange={(e) => setForm12Steps(prev => ({ ...prev, educationLevel: e.target.value as EducationLevel }))}
+                      className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-800 focus:outline-teal-600"
+                    >
+                      {EDUCATION_LEVEL_OPTIONS.map(opt => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-                <textarea
-                  rows={3}
-                  value={form12Steps.civilStatusNotes || ''}
-                  onChange={(e) => setForm12Steps({ ...form12Steps, civilStatusNotes: e.target.value })}
-                  placeholder="Habitat collectif, nombre de personnes par pièce, aération..."
-                  className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-teal-600 font-medium"
-                />
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xxs font-bold text-slate-600 block">
+                      Notes contextuelles & conditions de vie (logement, promiscuité, foyer familial)
+                    </label>
+                    <span className="text-[10px] text-teal-700 font-bold">Raccourcis 1-clic :</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {[
+                      'Habitat collectif / promiscuité (foyer > 6 personnes)',
+                      'Cuisine intérieure au feu de bois / biomasse',
+                      'Contage tuberculeux intrafamilial documenté',
+                      'Absence de contage respiratoire connu',
+                      'Habitat aéré, bonne ventilation naturelle',
+                      'Exposition poussières de battage / chantiers'
+                    ].map(chip => (
+                      <button
+                        key={chip}
+                        type="button"
+                        onClick={() => setForm12Steps(prev => ({
+                          ...prev,
+                          civilStatusNotes: prev.civilStatusNotes ? `${prev.civilStatusNotes}. ${chip}` : chip
+                        }))}
+                        className="text-[10px] font-medium bg-slate-100 hover:bg-teal-50 hover:text-teal-800 text-slate-700 px-2 py-0.5 rounded-md border border-slate-200 transition cursor-pointer"
+                      >
+                        + {chip}
+                      </button>
+                    ))}
+                  </div>
+                  <textarea
+                    rows={3}
+                    value={form12Steps.civilStatusNotes || ''}
+                    onChange={(e) => setForm12Steps({ ...form12Steps, civilStatusNotes: e.target.value })}
+                    placeholder="Habitat collectif, nombre de personnes par pièce, aération..."
+                    className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-teal-600 font-medium"
+                  />
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
           {/* STEP 2: MOTIF DE CONSULTATION */}
           {(activeStepTab === 2 || viewMode === 'CONTINUOUS_SHEET') && (
@@ -2905,91 +3724,101 @@ export const Consultations: React.FC = () => {
                 onChange={(e) => setForm12Steps({ ...form12Steps, historyOfIllness: e.target.value })}
                 className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-teal-600 leading-relaxed font-medium"
               />
+
+              {/* Échelle de Dyspnée mMRC déplacée dans l'Histoire de la Maladie */}
+              <div className="p-3.5 bg-gradient-to-r from-teal-50/70 to-blue-50/50 rounded-xl border border-teal-200 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Activity className="w-4 h-4 text-teal-600" />
+                    <span className="text-xxs font-extrabold uppercase text-slate-800 tracking-wider">
+                      Échelle de Dyspnée mMRC (Stades 0 à 4 — Histoire de la Maladie)
+                    </span>
+                  </div>
+                  {(form12Steps.mmrcGrade !== undefined || selectedMmrcGrade !== null) && (
+                    <span className="text-xxs font-bold text-teal-800 bg-teal-100 px-2 py-0.5 rounded-md border border-teal-200">
+                      Actif : Stade {form12Steps.mmrcGrade ?? selectedMmrcGrade}
+                    </span>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-5 gap-1.5">
+                  {MMRC_DYSPNEA_SCALE.map((s) => {
+                    const isActive = (form12Steps.mmrcGrade ?? selectedMmrcGrade) === s.grade;
+                    return (
+                      <button
+                        key={s.grade}
+                        type="button"
+                        onClick={() => handleApplyMmrcGrade(s.grade)}
+                        className={`p-2 rounded-lg border text-left transition cursor-pointer ${
+                          isActive
+                            ? 'bg-teal-600 text-white border-teal-700 shadow-xs ring-2 ring-teal-200'
+                            : 'bg-white hover:bg-teal-50/60 border-slate-200 text-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-0.5">
+                          <span className="text-xs font-black">{s.label}</span>
+                          {isActive && <Check className="w-3 h-3 text-white" />}
+                        </div>
+                        <p className={`text-[10px] leading-tight line-clamp-3 ${isActive ? 'text-teal-50' : 'text-slate-500'}`}>
+                          {s.desc}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-teal-700 italic">
+                  * La sélection d'un stade mMRC l'insère dans l'histoire de la maladie et pré-remplit les scores BPCO (mMRC, GOLD ABE, BODE).
+                </p>
+              </div>
             </div>
           )}
 
-          {/* STEP 4: ANTÉCÉDENTS ET FACTEURS DE RISQUE */}
+          {/* STEP 4: ANTÉCÉDENTS ET FACTEURS DE RISQUE (Sections A-F) */}
           {(activeStepTab === 4 || viewMode === 'CONTINUOUS_SHEET') && (
             <div id="step-4" className={`space-y-4 ${viewMode === 'CONTINUOUS_SHEET' ? 'pt-4 border-b border-slate-200 pb-6' : ''}`}>
-              <h3 className="text-sm font-black text-slate-800 pb-2 border-b border-slate-100">
-                4) Antécédents et Facteurs de Risque Respiratoires
-              </h3>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
                 <div>
-                  <label className="text-xxs font-bold text-slate-700 block mb-1">
-                    Tabagisme actif (Paquets-Années PA)
-                  </label>
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <input
-                      type="number"
-                      value={form12Steps.riskFactors.smokingPA || 0}
-                      onChange={(e) => setForm12Steps({
-                        ...form12Steps,
-                        riskFactors: { ...form12Steps.riskFactors, smokingPA: Number(e.target.value) }
-                      })}
-                      className="w-24 text-xs bg-slate-50 border border-slate-200 rounded-xl p-2 font-mono font-bold"
-                    />
-                    <span className="text-xxs text-slate-500">PA (20 cig/j = 1 PA/an)</span>
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {[0, 5, 10, 20, 30, 40].map(pa => (
-                      <button
-                        key={pa}
-                        type="button"
-                        onClick={() => setForm12Steps(prev => ({
-                          ...prev,
-                          riskFactors: { ...prev.riskFactors, smokingPA: pa }
-                        }))}
-                        className={`text-3xs font-mono font-bold px-2 py-0.5 rounded border transition cursor-pointer ${
-                          form12Steps.riskFactors.smokingPA === pa
-                            ? 'bg-teal-600 text-white border-teal-700'
-                            : 'bg-white text-slate-600 hover:bg-slate-100 border-slate-200'
-                        }`}
-                      >
-                        {pa === 0 ? '0 (Non fumeur)' : `${pa} PA`}
-                      </button>
-                    ))}
-                  </div>
+                  <h3 className="text-sm font-black text-slate-800">
+                    4) Antécédents et Facteurs de Risque (A à F)
+                  </h3>
+                  <p className="text-xxs text-slate-500">
+                    Tabagisme multi-périodes & PA automatiques, consommations, terrain médical, expositions pro/env, chirurgie & gynéco-obstétrique
+                  </p>
                 </div>
+                <VoiceDictationButton
+                  value={form12Steps.antecedentsText}
+                  onTranscript={(text) => setForm12Steps(prev => ({ ...prev, antecedentsText: text }))}
+                  fieldName="Synthèse des antécédents"
+                  buttonText="Dicter la synthèse"
+                  size="sm"
+                />
+              </div>
 
+              {/* Comprehensive A-F DPI History Editor */}
+              <PatientDpiHistoryEditor
+                value={dpiAntecedentsValue}
+                onChange={handleDpiAntecedentsChange}
+                gender={selectedPatient?.gender}
+              />
+
+              {/* Additional quick clinical fields (VIH, Contage TB, Allergies) */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs bg-slate-50 p-3.5 rounded-xl border border-slate-200">
                 <div>
-                  <label className="text-xxs font-bold text-slate-700 block mb-1">
-                    Statut Sérologique VIH
-                  </label>
+                  <label className="text-xxs font-bold text-slate-700 block mb-1">Statut Sérologique VIH</label>
                   <select
                     value={form12Steps.riskFactors.hivStatus}
                     onChange={(e) => setForm12Steps({
                       ...form12Steps,
                       riskFactors: { ...form12Steps.riskFactors, hivStatus: e.target.value as any }
                     })}
-                    className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2 font-bold text-slate-800"
+                    className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2 font-bold text-slate-800"
                   >
                     <option value="NEGATIF">VIH Négatif (Sérologie documentée)</option>
-                    <option value="POSITIF">VIH Positif (Sous antirétroviraux ARV)</option>
-                    <option value="INCONNU">Inconnu / Dépistage à proposer impérativement</option>
+                    <option value="POSITIF">VIH Positif (Sous ARV)</option>
+                    <option value="INCONNU">Inconnu / Dépistage à proposer</option>
                   </select>
                 </div>
-              </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                <label className="flex items-center gap-2.5 p-3 bg-slate-50 rounded-xl border border-slate-200 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={form12Steps.riskFactors.biomassExposure}
-                    onChange={(e) => setForm12Steps({
-                      ...form12Steps,
-                      riskFactors: { ...form12Steps.riskFactors, biomassExposure: e.target.checked }
-                    })}
-                    className="h-4 w-4 text-teal-600 rounded"
-                  />
-                  <div>
-                    <span className="font-bold text-slate-800 block">Exposition à la biomasse</span>
-                    <span className="text-[10px] text-slate-500">Cuisine au feu de bois / charbon domestique</span>
-                  </div>
-                </label>
-
-                <label className="flex items-center gap-2.5 p-3 bg-slate-50 rounded-xl border border-slate-200 cursor-pointer">
+                <label className="flex items-center gap-2.5 p-2.5 bg-white rounded-xl border border-slate-200 cursor-pointer">
                   <input
                     type="checkbox"
                     checked={form12Steps.riskFactors.tbContact}
@@ -3000,32 +3829,30 @@ export const Consultations: React.FC = () => {
                     className="h-4 w-4 text-teal-600 rounded"
                   />
                   <div>
-                    <span className="font-bold text-slate-800 block">Notion de contage tuberculeux</span>
-                    <span className="text-[10px] text-slate-500">Contact intrafamilial ou professionnel avéré</span>
+                    <span className="font-bold text-slate-800 block">Notion de contage TB</span>
+                    <span className="text-[10px] text-slate-500">Intrafamilial ou professionnel</span>
                   </div>
                 </label>
-              </div>
 
-              <div>
-                <label className="text-xxs font-bold text-slate-700 block mb-1">
-                  Terrain et allergies médicamenteuses
-                </label>
-                <input
-                  type="text"
-                  value={form12Steps.riskFactors.allergiesAtopy || ''}
-                  onChange={(e) => setForm12Steps({
-                    ...form12Steps,
-                    riskFactors: { ...form12Steps.riskFactors, allergiesAtopy: e.target.value }
-                  })}
-                  placeholder="Ex: Aucune allergie, allergie à la Pénicilline..."
-                  className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5"
-                />
+                <div>
+                  <label className="text-xxs font-bold text-slate-700 block mb-1">Allergies médicamenteuses</label>
+                  <input
+                    type="text"
+                    value={form12Steps.riskFactors.allergiesAtopy || ''}
+                    onChange={(e) => setForm12Steps({
+                      ...form12Steps,
+                      riskFactors: { ...form12Steps.riskFactors, allergiesAtopy: e.target.value }
+                    })}
+                    placeholder="Ex: Aucune allergie, Pénicilline..."
+                    className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                  />
+                </div>
               </div>
 
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xxs font-bold text-slate-700 block">
-                    Synthèse des antécédents médicaux, chirurgicaux et respiratoires
+                    Synthèse narrative des antécédents et facteurs de risque
                   </label>
                   <span className="text-[10px] text-teal-700 font-bold">Raccourcis 1-clic :</span>
                 </div>
@@ -3058,63 +3885,31 @@ export const Consultations: React.FC = () => {
                   className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5"
                 />
               </div>
-
-              {/* Échelle de Dyspnée mMRC Interactive */}
-              <div className="p-3.5 bg-gradient-to-r from-teal-50/70 to-blue-50/50 rounded-xl border border-teal-200 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Activity className="w-4 h-4 text-teal-600" />
-                    <span className="text-xxs font-extrabold uppercase text-slate-800 tracking-wider">
-                      Échelle de Dyspnée mMRC (Stades 0 à 4 — Pneumologie)
-                    </span>
-                  </div>
-                  {selectedMmrcGrade !== null && (
-                    <span className="text-xxs font-bold text-teal-800 bg-teal-100 px-2 py-0.5 rounded-md border border-teal-200">
-                      Actif : Stade {selectedMmrcGrade}
-                    </span>
-                  )}
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-5 gap-1.5">
-                  {MMRC_DYSPNEA_SCALE.map((s) => (
-                    <button
-                      key={s.grade}
-                      type="button"
-                      onClick={() => handleApplyMmrcGrade(s.grade)}
-                      className={`p-2 rounded-lg border text-left transition cursor-pointer ${
-                        selectedMmrcGrade === s.grade
-                          ? 'bg-teal-600 text-white border-teal-700 shadow-xs ring-2 ring-teal-200'
-                          : 'bg-white hover:bg-teal-50/60 border-slate-200 text-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-0.5">
-                        <span className="text-xs font-black">{s.label}</span>
-                        {selectedMmrcGrade === s.grade && <Check className="w-3 h-3 text-white" />}
-                      </div>
-                      <p className={`text-[10px] leading-tight line-clamp-3 ${selectedMmrcGrade === s.grade ? 'text-teal-50' : 'text-slate-500'}`}>
-                        {s.desc}
-                      </p>
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[10px] text-teal-700 italic">
-                  * Un clic sur un stade mMRC insère automatiquement le grade et sa description dans le texte d'observation.
-                </p>
-              </div>
             </div>
           )}
 
-          {/* STEP 5: CONSTANTES & EXAMEN GÉNÉRAL */}
+          {/* STEP 5: CONSTANTES & EXAMEN GÉNÉRAL (Avec IMC auto, SpO2 Air Ambiant vs Sous O2 & Séries multi-mesures) */}
           {(activeStepTab === 5 || viewMode === 'CONTINUOUS_SHEET') && (
             <div id="step-5" className={`space-y-4 ${viewMode === 'CONTINUOUS_SHEET' ? 'pt-4 border-b border-slate-200 pb-6' : ''}`}>
-              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100 flex-wrap gap-2">
                 <h3 className="text-sm font-black text-slate-800">
-                  5) Examen Général & Constantes Vitales
+                  5) Constantes & Paramètres Cliniques
                 </h3>
-                {bmiCalculation && (
-                  <span className={`text-xxs font-bold px-2.5 py-1 rounded-full ${bmiCalculation.colorClass}`}>
-                    IMC : {bmiCalculation.value} kg/m² ({bmiCalculation.category})
-                  </span>
-                )}
+                <div className="flex items-center gap-2">
+                  {bmiCalculation && (
+                    <span className={`text-xxs font-bold px-2.5 py-1 rounded-full ${bmiCalculation.colorClass}`}>
+                      IMC : {bmiCalculation.value} kg/m² ({bmiCalculation.category})
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleRecordVitalsSeries}
+                    className="text-xxs font-bold px-3 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-lg transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Enregistrer cette série de constantes</span>
+                  </button>
+                </div>
               </div>
 
               {/* Quick Vitals Accelerators */}
@@ -3140,11 +3935,12 @@ export const Consultations: React.FC = () => {
                 </button>
               </div>
 
+              {/* Paramètres principaux */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div>
                   <label className="text-xxs font-bold text-slate-600 block mb-1 flex items-center gap-1">
                     <Gauge className="w-3 h-3 text-slate-400" />
-                    <span>TA (mmHg)</span>
+                    <span>Tension Artérielle (mmHg)</span>
                   </label>
                   <input
                     type="text"
@@ -3165,11 +3961,12 @@ export const Consultations: React.FC = () => {
                   </label>
                   <input
                     type="number"
-                    value={form12Steps.vitals.pulse || 80}
+                    value={form12Steps.vitals.pulse || ''}
                     onChange={(e) => setForm12Steps({
                       ...form12Steps,
                       vitals: { ...form12Steps.vitals, pulse: Number(e.target.value) }
                     })}
+                    placeholder="80"
                     className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono font-bold"
                   />
                 </div>
@@ -3177,43 +3974,20 @@ export const Consultations: React.FC = () => {
                 <div>
                   <label className="text-xxs font-bold text-slate-600 block mb-1 flex items-center gap-1">
                     <Wind className="w-3 h-3 text-teal-600" />
-                    <span>FR (/min) *</span>
+                    <span>Fréquence Resp. (/min) *</span>
                   </label>
                   <input
                     type="number"
-                    value={form12Steps.vitals.rr}
+                    value={form12Steps.vitals.rr || ''}
                     onChange={(e) => setForm12Steps({
                       ...form12Steps,
                       vitals: { ...form12Steps.vitals, rr: Number(e.target.value) }
                     })}
+                    placeholder="18"
                     className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono font-black text-teal-800"
                   />
                 </div>
 
-                <div>
-                  <label className="text-xxs font-bold text-slate-600 block mb-1 flex items-center gap-1">
-                    <Activity className="w-3 h-3 text-blue-500" />
-                    <span>SpO2 Air Ambiant (%) *</span>
-                  </label>
-                  <input
-                    type="number"
-                    value={form12Steps.vitals.spo2Ambient}
-                    onChange={(e) => setForm12Steps({
-                      ...form12Steps,
-                      vitals: { ...form12Steps.vitals, spo2Ambient: Number(e.target.value) }
-                    })}
-                    className={`w-full text-xs bg-slate-50 border rounded-xl p-2.5 font-mono font-black ${
-                      (form12Steps.vitals.spo2Ambient || 95) < 90
-                        ? 'border-rose-400 text-rose-700 bg-rose-50/50'
-                        : (form12Steps.vitals.spo2Ambient || 95) < 94
-                        ? 'border-amber-400 text-amber-700'
-                        : 'border-slate-200 text-slate-900'
-                    }`}
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div>
                   <label className="text-xxs font-bold text-slate-600 block mb-1 flex items-center gap-1">
                     <Thermometer className="w-3 h-3 text-amber-500" />
@@ -3222,24 +3996,34 @@ export const Consultations: React.FC = () => {
                   <input
                     type="number"
                     step="0.1"
-                    value={form12Steps.vitals.temperature}
+                    value={form12Steps.vitals.temperature || ''}
                     onChange={(e) => setForm12Steps({
                       ...form12Steps,
                       vitals: { ...form12Steps.vitals, temperature: Number(e.target.value) }
                     })}
+                    placeholder="37.0"
                     className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono"
                   />
                 </div>
+              </div>
 
+              {/* Poids, Taille, IMC auto, État général */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div>
                   <label className="text-xxs font-bold text-slate-600 block mb-1">Poids (kg)</label>
                   <input
                     type="number"
-                    value={form12Steps.vitals.weight}
-                    onChange={(e) => setForm12Steps({
-                      ...form12Steps,
-                      vitals: { ...form12Steps.vitals, weight: Number(e.target.value) }
-                    })}
+                    step="0.1"
+                    value={form12Steps.vitals.weight || ''}
+                    onChange={(e) => {
+                      const w = Number(e.target.value);
+                      const computed = calcBmi(w, form12Steps.vitals.height);
+                      setForm12Steps({
+                        ...form12Steps,
+                        vitals: { ...form12Steps.vitals, weight: w, bmi: computed }
+                      });
+                    }}
+                    placeholder="65"
                     className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono"
                   />
                 </div>
@@ -3248,13 +4032,28 @@ export const Consultations: React.FC = () => {
                   <label className="text-xxs font-bold text-slate-600 block mb-1">Taille (cm)</label>
                   <input
                     type="number"
-                    value={form12Steps.vitals.height}
-                    onChange={(e) => setForm12Steps({
-                      ...form12Steps,
-                      vitals: { ...form12Steps.vitals, height: Number(e.target.value) }
-                    })}
+                    value={form12Steps.vitals.height || ''}
+                    onChange={(e) => {
+                      const h = Number(e.target.value);
+                      const computed = calcBmi(form12Steps.vitals.weight, h);
+                      setForm12Steps({
+                        ...form12Steps,
+                        vitals: { ...form12Steps.vitals, height: h, bmi: computed }
+                      });
+                    }}
+                    placeholder="170"
                     className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono"
                   />
+                </div>
+
+                <div>
+                  <label className="text-xxs font-bold text-slate-600 block mb-1">IMC calculé (kg/m²)</label>
+                  <div className="w-full text-xs bg-slate-100 border border-slate-200 rounded-xl p-2.5 font-mono font-black text-slate-800 flex items-center justify-between">
+                    <span>{bmiCalculation ? `${bmiCalculation.value} kg/m²` : '—'}</span>
+                    {bmiCalculation && (
+                      <span className="text-[10px] font-sans font-bold text-slate-600">{bmiCalculation.category}</span>
+                    )}
+                  </div>
                 </div>
 
                 <div>
@@ -3275,82 +4074,195 @@ export const Consultations: React.FC = () => {
                 </div>
               </div>
 
-              {/* Score de Gravité Pneumonie CRB-65 (Confusion, FR >= 30, TA < 90/60, Âge >= 65) */}
-              <div className="p-4 bg-slate-50/90 rounded-xl border border-slate-200 space-y-3">
-                <div className="flex items-center justify-between flex-wrap gap-2">
-                  <div className="flex items-center gap-2">
-                    <Calculator className="w-4 h-4 text-teal-600" />
-                    <span className="text-xxs font-extrabold uppercase text-slate-800 tracking-wider">
-                      Score de Gravité de Pneumonie CRB-65 (Recommandations BTS / Pneumologie)
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`text-xs font-black px-2.5 py-0.5 rounded-md border ${crb65Data.badgeColor}`}>
-                      Score : {crb65Data.score} / 4
-                    </span>
+              {/* Distinction SpO2 à l'air ambiant vs SpO2 sous oxygénothérapie */}
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <span className="text-xxs font-extrabold uppercase text-slate-800 flex items-center gap-1.5">
+                    <Activity className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Saturation en Oxygène (SpO₂)</span>
+                  </span>
+                  <div className="inline-flex p-1 bg-white rounded-lg border border-slate-200">
                     <button
                       type="button"
-                      onClick={handleInsertCrb65Score}
-                      className="text-xxs font-bold px-2.5 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-lg transition cursor-pointer flex items-center gap-1 shadow-2xs"
+                      onClick={() => setForm12Steps(prev => ({
+                        ...prev,
+                        vitals: { ...prev.vitals, spo2Mode: 'AIR_AMBIANT' }
+                      }))}
+                      className={`px-3 py-1 text-[11px] font-bold rounded-md transition cursor-pointer ${
+                        (form12Steps.vitals.spo2Mode || 'AIR_AMBIANT') === 'AIR_AMBIANT'
+                          ? 'bg-teal-600 text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
                     >
-                      <BookmarkCheck className="w-3 h-3" />
-                      <span>+ Insérer dans l'observation</span>
+                      SpO₂ à l'air ambiant
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setForm12Steps(prev => ({
+                        ...prev,
+                        vitals: { ...prev.vitals, spo2Mode: 'SOUS_O2' }
+                      }))}
+                      className={`px-3 py-1 text-[11px] font-bold rounded-md transition cursor-pointer ${
+                        form12Steps.vitals.spo2Mode === 'SOUS_O2'
+                          ? 'bg-blue-600 text-white shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      SpO₂ sous oxygénothérapie
                     </button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xxs">
-                  <label className={`p-2.5 rounded-lg border flex items-center gap-2 cursor-pointer transition ${crb65Confusion ? 'bg-rose-50 border-rose-300 text-rose-900 font-bold' : 'bg-white border-slate-200 text-slate-700'}`}>
-                    <input
-                      type="checkbox"
-                      checked={crb65Confusion}
-                      onChange={(e) => setCrb65Confusion(e.target.checked)}
-                      className="h-3.5 w-3.5 text-teal-600 rounded"
-                    />
-                    <span><strong>C</strong> — Confusion mentale</span>
-                  </label>
-                  <label className={`p-2.5 rounded-lg border flex items-center gap-2 cursor-pointer transition ${(crb65RrHigh || (form12Steps.vitals.rr && form12Steps.vitals.rr >= 30)) ? 'bg-rose-50 border-rose-300 text-rose-900 font-bold' : 'bg-white border-slate-200 text-slate-700'}`}>
-                    <input
-                      type="checkbox"
-                      checked={crb65RrHigh || (form12Steps.vitals.rr ? form12Steps.vitals.rr >= 30 : false)}
-                      onChange={(e) => setCrb65RrHigh(e.target.checked)}
-                      className="h-3.5 w-3.5 text-teal-600 rounded"
-                    />
-                    <span><strong>R</strong> — FR &ge; 30/min ({form12Steps.vitals.rr || 24}/min)</span>
-                  </label>
-                  <label className={`p-2.5 rounded-lg border flex items-center gap-2 cursor-pointer transition ${crb65BpLow ? 'bg-rose-50 border-rose-300 text-rose-900 font-bold' : 'bg-white border-slate-200 text-slate-700'}`}>
-                    <input
-                      type="checkbox"
-                      checked={crb65BpLow}
-                      onChange={(e) => setCrb65BpLow(e.target.checked)}
-                      className="h-3.5 w-3.5 text-teal-600 rounded"
-                    />
-                    <span><strong>B</strong> — PAS &lt; 90 ou PAD &le; 60</span>
-                  </label>
-                  <label className={`p-2.5 rounded-lg border flex items-center gap-2 cursor-pointer transition ${(crb65AgeHigh || (selectedPatient?.age && selectedPatient.age >= 65)) ? 'bg-rose-50 border-rose-300 text-rose-900 font-bold' : 'bg-white border-slate-200 text-slate-700'}`}>
-                    <input
-                      type="checkbox"
-                      checked={crb65AgeHigh || (selectedPatient?.age ? selectedPatient.age >= 65 : false)}
-                      onChange={(e) => setCrb65AgeHigh(e.target.checked)}
-                      className="h-3.5 w-3.5 text-teal-600 rounded"
-                    />
-                    <span><strong>65</strong> — Âge &ge; 65 ans ({selectedPatient?.age || 45} ans)</span>
-                  </label>
-                </div>
-
-                <div className="flex items-center justify-between text-xxs pt-1 border-t border-slate-200/80">
-                  <span className="text-slate-600">
-                    <strong>Interprétation :</strong> {crb65Data.severity}
-                  </span>
-                  <span className="font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                    {crb65Data.recommendation}
-                  </span>
-                </div>
+                {(form12Steps.vitals.spo2Mode || 'AIR_AMBIANT') === 'AIR_AMBIANT' ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-xxs font-bold text-slate-700 block mb-1">SpO₂ Air Ambiant (%) *</label>
+                      <input
+                        type="number"
+                        value={form12Steps.vitals.spo2Ambient || ''}
+                        onChange={(e) => setForm12Steps({
+                          ...form12Steps,
+                          vitals: { ...form12Steps.vitals, spo2Ambient: Number(e.target.value) }
+                        })}
+                        placeholder="97"
+                        className={`w-full text-xs bg-white border rounded-xl p-2.5 font-mono font-black ${
+                          (form12Steps.vitals.spo2Ambient || 95) < 90
+                            ? 'border-rose-400 text-rose-700 bg-rose-50/50'
+                            : (form12Steps.vitals.spo2Ambient || 95) < 94
+                            ? 'border-amber-400 text-amber-700'
+                            : 'border-slate-200 text-slate-900'
+                        }`}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div>
+                      <label className="text-xxs font-bold text-blue-900 block mb-1">SpO₂ sous O₂ (%) *</label>
+                      <input
+                        type="number"
+                        value={form12Steps.vitals.spo2O2 || ''}
+                        onChange={(e) => setForm12Steps({
+                          ...form12Steps,
+                          vitals: { ...form12Steps.vitals, spo2O2: Number(e.target.value) }
+                        })}
+                        placeholder="95"
+                        className="w-full text-xs bg-white border border-blue-200 rounded-xl p-2.5 font-mono font-black text-blue-900"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xxs font-bold text-blue-900 block mb-1">Débit O₂ (L/min)</label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        value={form12Steps.vitals.o2FlowLiters || ''}
+                        onChange={(e) => setForm12Steps({
+                          ...form12Steps,
+                          vitals: { ...form12Steps.vitals, o2FlowLiters: Number(e.target.value) }
+                        })}
+                        placeholder="3"
+                        className="w-full text-xs bg-white border border-blue-200 rounded-xl p-2.5 font-mono font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xxs font-bold text-blue-900 block mb-1">Dispositif utilisé</label>
+                      <select
+                        value={form12Steps.vitals.o2Device || 'Lunettes nasales'}
+                        onChange={(e) => setForm12Steps({
+                          ...form12Steps,
+                          vitals: { ...form12Steps.vitals, o2Device: e.target.value }
+                        })}
+                        className="w-full text-xs bg-white border border-blue-200 rounded-xl p-2.5 font-semibold"
+                      >
+                        {O2_DEVICE_OPTIONS.map(dev => (
+                          <option key={dev} value={dev}>{dev}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-xxs font-bold text-blue-900 block mb-1">FiO₂ (%) (optionnel)</label>
+                      <input
+                        type="number"
+                        value={form12Steps.vitals.fio2 ?? ''}
+                        onChange={(e) => setForm12Steps({
+                          ...form12Steps,
+                          vitals: {
+                            ...form12Steps.vitals,
+                            fio2: e.target.value === '' ? undefined : Number(e.target.value)
+                          }
+                        })}
+                        placeholder="Ex: 32"
+                        className="w-full text-xs bg-white border border-blue-200 rounded-xl p-2.5 font-mono"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
+
+              {/* Historique des séries de constantes enregistrées (Suivi / Hospitalisation) */}
+              {(form12Steps.vitalsSeries?.length || 0) > 0 && (
+                <div className="p-3.5 bg-white rounded-xl border border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xxs font-extrabold uppercase text-slate-700">
+                      Séries de constantes enregistrées ({form12Steps.vitalsSeries?.length})
+                    </span>
+                    <span className="text-[10px] text-teal-700 font-semibold">
+                      Synchronisées avec la courbe d'hospitalisation si patient hospitalisé
+                    </span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[11px] text-left">
+                      <thead className="bg-slate-50 text-slate-500 uppercase text-[10px]">
+                        <tr>
+                          <th className="p-1.5">Heure</th>
+                          <th className="p-1.5">TA</th>
+                          <th className="p-1.5">Pouls</th>
+                          <th className="p-1.5">FR</th>
+                          <th className="p-1.5">SpO₂ / O₂</th>
+                          <th className="p-1.5">T°</th>
+                          <th className="p-1.5">IMC</th>
+                          <th className="p-1.5 text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {(form12Steps.vitalsSeries || []).map(s => (
+                          <tr key={s.id}>
+                            <td className="p-1.5 font-mono text-slate-600">
+                              {new Date(s.timestamp).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                            </td>
+                            <td className="p-1.5 font-mono font-bold">{s.bp || '--'}</td>
+                            <td className="p-1.5 font-mono">{s.pulse || '--'} bpm</td>
+                            <td className="p-1.5 font-mono">{s.rr || '--'}/min</td>
+                            <td className="p-1.5 font-mono">
+                              {s.spo2Mode === 'SOUS_O2'
+                                ? `${s.spo2O2 || '--'}% (${s.o2FlowLiters || 0}L ${s.o2Device || 'O2'}${s.fio2 ? ` FiO2 ${s.fio2}%` : ''})`
+                                : `${s.spo2Ambient || '--'}% (AA)`}
+                            </td>
+                            <td className="p-1.5 font-mono">{s.temperature || '--'}°C</td>
+                            <td className="p-1.5 font-mono">{s.bmi ? `${s.bmi}` : '--'}</td>
+                            <td className="p-1.5 text-right">
+                              <button
+                                type="button"
+                                onClick={() => setForm12Steps(prev => ({
+                                  ...prev,
+                                  vitalsSeries: (prev.vitalsSeries || []).filter(item => item.id !== s.id)
+                                }))}
+                                className="text-slate-400 hover:text-rose-600 p-1 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
-          {/* STEP 6: APPAREILS ET SYSTÈMES AVEC PARENTHÈSES CLINIQUES () */}
+          {/* STEP 6: APPAREILS ET SYSTÈMES AVEC PARENTHÈSES CLINIQUES () & DICTÉE VOCALE */}
           {(activeStepTab === 6 || viewMode === 'CONTINUOUS_SHEET') && (
             <div id="step-6" className={`space-y-4 ${viewMode === 'CONTINUOUS_SHEET' ? 'pt-4 border-b border-slate-200 pb-6' : ''}`}>
               <div className="flex items-center justify-between pb-2 border-b border-slate-100">
@@ -3359,7 +4271,7 @@ export const Consultations: React.FC = () => {
                     6) Examen des Appareils et Systèmes
                   </h3>
                   <p className="text-xxs text-slate-500">
-                    Respect strict de la règle des parenthèses cliniques `()` sans signes préimprimés
+                    Raccourcis normaux `()` en 1 clic et dictée vocale médicale dédiée sur chaque appareil
                   </p>
                 </div>
               </div>
@@ -3415,7 +4327,6 @@ export const Consultations: React.FC = () => {
                   </span>
                 </div>
 
-                {/* Zone selector */}
                 <div className="flex flex-wrap gap-1.5">
                   {THORACIC_ZONES.map(z => (
                     <button
@@ -3433,7 +4344,6 @@ export const Consultations: React.FC = () => {
                   ))}
                 </div>
 
-                {/* Instant finding buttons for selected zone */}
                 <div className="flex flex-wrap gap-1 pt-1.5 border-t border-slate-200">
                   <span className="text-3xs font-bold text-slate-400 uppercase py-1">Insérer :</span>
                   {[
@@ -3456,173 +4366,129 @@ export const Consultations: React.FC = () => {
                 </div>
               </div>
 
-              {/* Auscultation Pulmonaire Murmure Vésiculaire */}
-              <div className="space-y-1.5 p-3 bg-slate-50/70 rounded-xl border border-slate-200">
-                <div className="flex items-center justify-between">
-                  <label className="text-xxs font-extrabold uppercase text-slate-700">
-                    Auscultation Pulmonaire — Murmure Vésiculaire
-                  </label>
-                  <span className="text-[10px] text-teal-700 font-bold">Raccourcis () :</span>
+              {/* All 11 Systems with () Shortcuts + Voice Dictation + Editable Text */}
+              {[
+                {
+                  key: 'pulmonaryVesicularBreath' as const,
+                  label: 'Auscultation Pulmonaire — Murmure Vésiculaire ()',
+                  prefix: 'Murmure vésiculaire ',
+                  presets: CLINICAL_PARENTHESES_PRESETS.pulmonaryVesicularBreath
+                },
+                {
+                  key: 'pulmonaryCrackles' as const,
+                  label: 'Râles Crépitants ()',
+                  prefix: 'Râles crépitants ',
+                  presets: CLINICAL_PARENTHESES_PRESETS.pulmonaryCrackles
+                },
+                {
+                  key: 'pulmonaryWheezes' as const,
+                  label: 'Sibilants & Wheezing ()',
+                  prefix: 'Sibilants ',
+                  presets: CLINICAL_PARENTHESES_PRESETS.pulmonaryWheezes
+                },
+                {
+                  key: 'pulmonaryRhonchi' as const,
+                  label: 'Ronchis & Sous-crépitants ()',
+                  prefix: 'Ronchis ',
+                  presets: CLINICAL_PARENTHESES_PRESETS.pulmonaryRhonchi
+                },
+                {
+                  key: 'pleuralFriction' as const,
+                  label: 'Frottement Pleural & Syndrome d\'Épanchement ()',
+                  prefix: 'Frottement pleural ',
+                  presets: CLINICAL_PARENTHESES_PRESETS.pleuralFriction
+                },
+                {
+                  key: 'cyanosisClubbing' as const,
+                  label: 'Cyanose & Hippocratisme Digital ()',
+                  prefix: '',
+                  presets: CLINICAL_PARENTHESES_PRESETS.cyanosisClubbing
+                },
+                {
+                  key: 'cardiovascular' as const,
+                  label: 'Appareil Cardiovasculaire (BDC, TJ, RHJ, OMI) ()',
+                  prefix: '',
+                  presets: CLINICAL_PARENTHESES_PRESETS.cardiovascular
+                },
+                {
+                  key: 'abdomen' as const,
+                  label: 'Appareil Digestif & Abdomen ()',
+                  prefix: '',
+                  presets: CLINICAL_PARENTHESES_PRESETS.abdomen
+                },
+                {
+                  key: 'neurological' as const,
+                  label: 'Système Nerveux & Examen Neurologique ()',
+                  prefix: '',
+                  presets: CLINICAL_PARENTHESES_PRESETS.neurological
+                },
+                {
+                  key: 'entLymphNodes' as const,
+                  label: 'Sphère ORL & Aires Ganglionnaires ()',
+                  prefix: '',
+                  presets: CLINICAL_PARENTHESES_PRESETS.entLymphNodes
+                },
+                {
+                  key: 'cutaneous' as const,
+                  label: 'Examen Cutanéo-Muqueux & Phanères ()',
+                  prefix: '',
+                  presets: CLINICAL_PARENTHESES_PRESETS.cutaneous
+                }
+              ].map(sys => (
+                <div key={sys.key} className="space-y-1.5 p-3 bg-slate-50/70 rounded-xl border border-slate-200">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <label className="text-xxs font-extrabold uppercase text-slate-700">
+                      {sys.label}
+                    </label>
+                    <VoiceDictationButton
+                      value={form12Steps.systems[sys.key] || ''}
+                      onTranscript={(text) => setForm12Steps(prev => ({
+                        ...prev,
+                        systems: { ...prev.systems, [sys.key]: text }
+                      }))}
+                      fieldName={sys.label}
+                      buttonText="Dicter"
+                      size="sm"
+                      appendMode={true}
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-1 items-center">
+                    <span className="text-[10px] text-teal-700 font-bold mr-1">Raccourcis () :</span>
+                    {sys.presets.map(p => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => insertParenthesisPreset(sys.key, sys.prefix ? `${sys.prefix}${p}` : p)}
+                        className="text-[10px] px-2 py-0.5 bg-white border border-slate-200 hover:border-teal-300 rounded text-slate-700 cursor-pointer"
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    type="text"
+                    value={form12Steps.systems[sys.key] || ''}
+                    onChange={(e) => setForm12Steps({
+                      ...form12Steps,
+                      systems: { ...form12Steps.systems, [sys.key]: e.target.value }
+                    })}
+                    className="w-full text-xs bg-white border border-slate-200 rounded-lg p-2 font-medium"
+                  />
                 </div>
-                <div className="flex flex-wrap gap-1">
-                  {CLINICAL_PARENTHESES_PRESETS.pulmonaryVesicularBreath.map(p => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => insertParenthesisPreset('pulmonaryVesicularBreath', `Murmure vésiculaire ${p}`)}
-                      className="text-[10px] px-2 py-0.5 bg-white border border-slate-200 hover:border-teal-300 rounded text-slate-700 cursor-pointer"
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
-                <input
-                  type="text"
-                  value={form12Steps.systems.pulmonaryVesicularBreath}
-                  onChange={(e) => setForm12Steps({
-                    ...form12Steps,
-                    systems: { ...form12Steps.systems, pulmonaryVesicularBreath: e.target.value }
-                  })}
-                  className="w-full text-xs bg-white border border-slate-200 rounded-lg p-2 font-medium"
-                />
-              </div>
-
-              {/* Râles Crépitants */}
-              <div className="space-y-1.5 p-3 bg-slate-50/70 rounded-xl border border-slate-200">
-                <div className="flex items-center justify-between">
-                  <label className="text-xxs font-extrabold uppercase text-slate-700">
-                    Râles Crépitants ()
-                  </label>
-                  <span className="text-[10px] text-teal-700 font-bold">Raccourcis () :</span>
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {CLINICAL_PARENTHESES_PRESETS.pulmonaryCrackles.map(p => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => insertParenthesisPreset('pulmonaryCrackles', `Râles crépitants ${p}`)}
-                      className="text-[10px] px-2 py-0.5 bg-white border border-slate-200 hover:border-teal-300 rounded text-slate-700 cursor-pointer"
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
-                <input
-                  type="text"
-                  value={form12Steps.systems.pulmonaryCrackles}
-                  onChange={(e) => setForm12Steps({
-                    ...form12Steps,
-                    systems: { ...form12Steps.systems, pulmonaryCrackles: e.target.value }
-                  })}
-                  className="w-full text-xs bg-white border border-slate-200 rounded-lg p-2 font-medium"
-                />
-              </div>
-
-              {/* Sibilants & Wheezing */}
-              <div className="space-y-1.5 p-3 bg-slate-50/70 rounded-xl border border-slate-200">
-                <div className="flex items-center justify-between">
-                  <label className="text-xxs font-extrabold uppercase text-slate-700">
-                    Sibilants & Wheezing ()
-                  </label>
-                  <span className="text-[10px] text-teal-700 font-bold">Raccourcis () :</span>
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {CLINICAL_PARENTHESES_PRESETS.pulmonaryWheezes.map(p => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => insertParenthesisPreset('pulmonaryWheezes', `Sibilants ${p}`)}
-                      className="text-[10px] px-2 py-0.5 bg-white border border-slate-200 hover:border-teal-300 rounded text-slate-700 cursor-pointer"
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
-                <input
-                  type="text"
-                  value={form12Steps.systems.pulmonaryWheezes}
-                  onChange={(e) => setForm12Steps({
-                    ...form12Steps,
-                    systems: { ...form12Steps.systems, pulmonaryWheezes: e.target.value }
-                  })}
-                  className="w-full text-xs bg-white border border-slate-200 rounded-lg p-2 font-medium"
-                />
-              </div>
-
-              {/* Cardiovasculaire */}
-              <div className="space-y-1.5 p-3 bg-slate-50/70 rounded-xl border border-slate-200">
-                <div className="flex items-center justify-between">
-                  <label className="text-xxs font-extrabold uppercase text-slate-700">
-                    Examen Cardiovasculaire (Bruits, TJ, RHJ, OMI) ()
-                  </label>
-                  <span className="text-[10px] text-teal-700 font-bold">Raccourcis () :</span>
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {CLINICAL_PARENTHESES_PRESETS.cardiovascular.map(p => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => insertParenthesisPreset('cardiovascular', p)}
-                      className="text-[10px] px-2 py-0.5 bg-white border border-slate-200 hover:border-teal-300 rounded text-slate-700 cursor-pointer"
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
-                <input
-                  type="text"
-                  value={form12Steps.systems.cardiovascular}
-                  onChange={(e) => setForm12Steps({
-                    ...form12Steps,
-                    systems: { ...form12Steps.systems, cardiovascular: e.target.value }
-                  })}
-                  className="w-full text-xs bg-white border border-slate-200 rounded-lg p-2 font-medium"
-                />
-              </div>
-
-              {/* Abdomen & Aires Ganglionnaires */}
-              <div className="space-y-1.5 p-3 bg-slate-50/70 rounded-xl border border-slate-200">
-                <div className="flex items-center justify-between">
-                  <label className="text-xxs font-extrabold uppercase text-slate-700">
-                    Abdomen, Aires Ganglionnaires & Signes Cutanés ()
-                  </label>
-                  <span className="text-[10px] text-teal-700 font-bold">Raccourcis () :</span>
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {CLINICAL_PARENTHESES_PRESETS.abdomen.map(p => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => insertParenthesisPreset('abdomen', p)}
-                      className="text-[10px] px-2 py-0.5 bg-white border border-slate-200 hover:border-teal-300 rounded text-slate-700 cursor-pointer"
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
-                <input
-                  type="text"
-                  value={form12Steps.systems.abdomen}
-                  onChange={(e) => setForm12Steps({
-                    ...form12Steps,
-                    systems: { ...form12Steps.systems, abdomen: e.target.value }
-                  })}
-                  className="w-full text-xs bg-white border border-slate-200 rounded-lg p-2 font-medium"
-                />
-              </div>
+              ))}
             </div>
           )}
 
-          {/* STEP 7: RÉSUMÉ SYNDROMIQUE */}
+          {/* STEP 7: RÉSUMÉ SYNDROMIQUE STRUCTURÉ */}
           {(activeStepTab === 7 || viewMode === 'CONTINUOUS_SHEET') && (
             <div id="step-7" className={`space-y-4 ${viewMode === 'CONTINUOUS_SHEET' ? 'pt-4 border-b border-slate-200 pb-6' : ''}`}>
-              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100 flex-wrap gap-2">
                 <div>
                   <h3 className="text-sm font-black text-slate-800">
                     7) Résumé Syndromique
                   </h3>
                   <p className="text-xxs text-slate-500">
-                    Synthèse sémiologique intégrée regroupant les signes fonctionnels et physiques
+                    Phrase d'introduction structurée (antécédents sélectionnés) et syndromes classés par ordre de gravité et de priorité clinique
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
@@ -3630,7 +4496,6 @@ export const Consultations: React.FC = () => {
                     type="button"
                     onClick={handleAutoGenerateSyndromicSummary}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xxs font-extrabold bg-teal-600 text-white hover:bg-teal-700 shadow-2xs transition cursor-pointer"
-                    title="Générer automatiquement le résumé syndromique à partir des signes saisis"
                   >
                     <Zap className="w-3.5 h-3.5 fill-current" />
                     <span>⚡ Synthèse Automatique</span>
@@ -3645,38 +4510,210 @@ export const Consultations: React.FC = () => {
                 </div>
               </div>
 
-              {/* Quick syndromic archetype buttons */}
-              <div className="flex flex-wrap gap-1.5 p-2.5 bg-slate-50 rounded-xl border border-slate-200">
-                <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider block w-full mb-0.5">
-                  Archétypes syndromiques rapides :
-                </span>
-                {[
-                  'Syndrome de condensation pulmonaire fébrile subaigu avec altération de l\'état général sur terrain à risque.',
-                  'Syndrome d\'obstruction bronchique avec exacerbation aiguë purulente chez un patient tabagique.',
-                  'Syndrome d\'épanchement liquidien pleural unilatéral avec silence auscultatoire et matité franche.',
-                  'Syndrome de détresse respiratoire aiguë avec hypoxémie sévère et polypnée superficielle.'
-                ].map(synth => (
+              {/* Relevant antecedents selection for the intro */}
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <span className="text-[10px] font-extrabold text-slate-600 uppercase tracking-wider">
+                    Antécédents pertinents à inclure dans l'introduction :
+                  </span>
                   <button
-                    key={synth}
                     type="button"
-                    onClick={() => setForm12Steps({ ...form12Steps, syndromicSummary: synth })}
-                    className="text-[10px] text-slate-700 bg-white hover:bg-teal-50 hover:text-teal-800 border border-slate-200 rounded-md px-2 py-1 text-left transition cursor-pointer"
+                    onClick={() => {
+                      const intro = buildSyndromicIntroTemplate();
+                      setForm12Steps(prev => ({
+                        ...prev,
+                        syndromicIntro: intro,
+                        syndromicSummary: syncSyndromicSummaryText(intro, prev.syndromicItems || [])
+                      }));
+                    }}
+                    className="text-[11px] font-bold text-teal-700 hover:underline cursor-pointer"
                   >
-                    + {synth.slice(0, 50)}...
+                    Régénérer la phrase d'introduction type
                   </button>
-                ))}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {Array.from(
+                    new Set([
+                      ...(dpiAntecedentsValue.medicalAntecedents || []),
+                      ...(dpiAntecedentsValue.smokingPackYears > 0 ? [`Tabagisme ${dpiAntecedentsValue.smokingPackYears} PA`] : []),
+                      ...(dpiAntecedentsValue.biomassExposure ? ['Exposition à la biomasse'] : []),
+                      ...(form12Steps.riskFactors.tbContact ? ['Contage tuberculeux'] : []),
+                      'HTA',
+                      'Diabète',
+                      'Asthme',
+                      'BPCO',
+                      'Tuberculose antérieure'
+                    ])
+                  ).map(ant => {
+                    const selected = (form12Steps.syndromicSelectedAntecedents || []).includes(ant);
+                    return (
+                      <button
+                        key={ant}
+                        type="button"
+                        onClick={() => handleToggleSyndromicAntecedent(ant)}
+                        className={`text-[11px] px-2.5 py-1 rounded-lg border font-semibold transition cursor-pointer ${
+                          selected
+                            ? 'bg-teal-600 text-white border-teal-700'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-teal-50'
+                        }`}
+                      >
+                        {selected ? '✓ ' : '+ '}{ant}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
-              <textarea
-                rows={4}
-                value={form12Steps.syndromicSummary}
-                onChange={(e) => setForm12Steps({ ...form12Steps, syndromicSummary: e.target.value })}
-                className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-teal-600 leading-relaxed font-bold text-teal-950"
-              />
+              {/* Editable intro phrase */}
+              <div className="space-y-1">
+                <label className="text-xxs font-bold text-slate-700 block">
+                  Introduction structurée (modifiable librement) :
+                </label>
+                <textarea
+                  rows={2}
+                  value={form12Steps.syndromicIntro ?? buildSyndromicIntroTemplate()}
+                  onChange={(e) => {
+                    const nextIntro = e.target.value;
+                    setForm12Steps(prev => ({
+                      ...prev,
+                      syndromicIntro: nextIntro,
+                      syndromicSummary: syncSyndromicSummaryText(nextIntro, prev.syndromicItems || [])
+                    }));
+                  }}
+                  className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-medium"
+                />
+              </div>
+
+              {/* Ordered list of syndromes by severity/priority */}
+              <div className="p-3.5 bg-white rounded-xl border border-slate-200 space-y-2.5">
+                <span className="text-xxs font-extrabold uppercase text-slate-700 block">
+                  Syndromes retenus (classés par ordre de gravité et de priorité clinique) :
+                </span>
+
+                {(form12Steps.syndromicItems || []).length > 0 && (
+                  <div className="space-y-1.5">
+                    {(form12Steps.syndromicItems || []).map((item, idx) => (
+                      <div key={item.id} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg border border-slate-200">
+                        <span className="w-6 h-6 rounded-md bg-teal-700 text-white font-black text-xs flex items-center justify-center shrink-0">
+                          {idx + 1}
+                        </span>
+                        <input
+                          type="text"
+                          value={item.text}
+                          onChange={(e) => {
+                            const updated = (form12Steps.syndromicItems || []).map(it =>
+                              it.id === item.id ? { ...it, text: e.target.value } : it
+                            );
+                            const intro = form12Steps.syndromicIntro || buildSyndromicIntroTemplate();
+                            setForm12Steps(prev => ({
+                              ...prev,
+                              syndromicItems: updated,
+                              syndromicSummary: syncSyndromicSummaryText(intro, updated)
+                            }));
+                          }}
+                          className="flex-1 text-xs bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 font-semibold"
+                        />
+                        <select
+                          value={item.severity || 'MAJEUR'}
+                          onChange={(e) => {
+                            const updated = (form12Steps.syndromicItems || []).map(it =>
+                              it.id === item.id ? { ...it, severity: e.target.value as any } : it
+                            );
+                            const intro = form12Steps.syndromicIntro || buildSyndromicIntroTemplate();
+                            setForm12Steps(prev => ({
+                              ...prev,
+                              syndromicItems: updated,
+                              syndromicSummary: syncSyndromicSummaryText(intro, updated)
+                            }));
+                          }}
+                          className="text-[11px] bg-white border border-slate-200 rounded-lg px-2 py-1 font-bold"
+                        >
+                          <option value="CRITIQUE">Critique</option>
+                          <option value="MAJEUR">Majeur</option>
+                          <option value="MODERE">Modéré</option>
+                        </select>
+                        <button
+                          type="button"
+                          onClick={() => handleMoveSyndromicItem(idx, -1)}
+                          disabled={idx === 0}
+                          className="p-1 text-slate-500 hover:text-teal-700 disabled:opacity-30 cursor-pointer"
+                          title="Monter en priorité"
+                        >
+                          <ArrowUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleMoveSyndromicItem(idx, 1)}
+                          disabled={idx === (form12Steps.syndromicItems || []).length - 1}
+                          className="p-1 text-slate-500 hover:text-teal-700 disabled:opacity-30 cursor-pointer"
+                          title="Descendre en priorité"
+                        >
+                          <ArrowDown className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveSyndromicItem(item.id)}
+                          className="p-1 text-slate-400 hover:text-rose-600 cursor-pointer"
+                          title="Supprimer ce syndrome"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
+                  <input
+                    type="text"
+                    value={newSyndromeText}
+                    onChange={(e) => setNewSyndromeText(e.target.value)}
+                    placeholder="Ex: Syndrome de condensation pulmonaire fébrile..."
+                    className="flex-1 text-xs bg-slate-50 border border-slate-200 rounded-lg px-3 py-2"
+                  />
+                  <select
+                    value={newSyndromeSeverity}
+                    onChange={(e) => setNewSyndromeSeverity(e.target.value as any)}
+                    className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 font-bold"
+                  >
+                    <option value="CRITIQUE">Critique</option>
+                    <option value="MAJEUR">Majeur</option>
+                    <option value="MODERE">Modéré</option>
+                  </select>
+                  <VoiceDictationButton
+                    value={newSyndromeText}
+                    onTranscript={(t) => setNewSyndromeText(t)}
+                    fieldName="Nouveau syndrome"
+                    buttonText="Dicter"
+                    size="sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleAddSyndromicItem()}
+                    className="px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold cursor-pointer flex items-center gap-1 justify-center"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Ajouter</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Final editable summary text */}
+              <div className="space-y-1">
+                <label className="text-xxs font-bold text-slate-700 block">
+                  Texte complet du Résumé Syndromique (utilisé dans l'observation et l'impression) :
+                </label>
+                <textarea
+                  rows={4}
+                  value={form12Steps.syndromicSummary}
+                  onChange={(e) => setForm12Steps({ ...form12Steps, syndromicSummary: e.target.value })}
+                  className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-3 focus:outline-teal-600 leading-relaxed font-bold text-teal-950"
+                />
+              </div>
             </div>
           )}
 
-          {/* STEP 8: HYPOTHÈSES DIAGNOSTIQUES */}
+          {/* STEP 8: HYPOTHÈSES DIAGNOSTIQUES + SCORES CONTEXTUELS */}
           {(activeStepTab === 8 || viewMode === 'CONTINUOUS_SHEET') && (
             <div id="step-8" className={`space-y-4 ${viewMode === 'CONTINUOUS_SHEET' ? 'pt-4 border-b border-slate-200 pb-6' : ''}`}>
               <div className="flex items-center justify-between pb-2 border-b border-slate-100">
@@ -3699,7 +4736,7 @@ export const Consultations: React.FC = () => {
                     '4. Crise d\'asthme aiguë paroxystique (CA23.3)',
                     '5. Embolie pulmonaire de probabilité intermédiaire (CB00)',
                     '6. Pleurésie séro-fibrineuse infectieuse ou tuberculeuse (CB41)',
-                    '7. Pneumothorax spontané compressif ou simple (CB03)'
+                    '7. Sepsis / Détresse respiratoire aiguë sévère'
                   ].map(item => (
                     <button
                       key={item}
@@ -3758,29 +4795,56 @@ export const Consultations: React.FC = () => {
                   <span>Ajouter une hypothèse</span>
                 </button>
               </div>
+
+              {/* Contextual Clinical Scores suggested right after Hypotheses */}
+              {renderContextualClinicalScores()}
             </div>
           )}
 
-          {/* STEP 9: EXAMENS COMPLÉMENTAIRES DEMANDÉS */}
+          {/* STEP 9: EXPLORATIONS COMPLÉMENTAIRES A-F + RÉSULTATS & PIÈCES JOINTES */}
           {(activeStepTab === 9 || viewMode === 'CONTINUOUS_SHEET') && (
             <div id="step-9" className={`space-y-4 ${viewMode === 'CONTINUOUS_SHEET' ? 'pt-4 border-b border-slate-200 pb-6' : ''}`}>
               <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                <h3 className="text-sm font-black text-slate-800">
-                  9) Examens Complémentaires Prescrits (Explorations)
-                </h3>
+                <div>
+                  <h3 className="text-sm font-black text-slate-800">
+                    9) Explorations Complémentaires (Catégories A à F)
+                  </h3>
+                  <p className="text-xxs text-slate-500">
+                    Prescription structurée, statuts (Prescrit / En attente / Réalisé), résultats avec dictée vocale, pièces jointes Photo/PDF/DICOM et spirométrie structurée
+                  </p>
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+              {/* Explorations récentes du patient (Module Explorations) */}
+              {patientExplorations.length > 0 && (
+                <div className="p-3 bg-blue-50/70 rounded-xl border border-blue-200 space-y-1.5">
+                  <span className="text-[10px] font-extrabold uppercase text-blue-900 flex items-center gap-1.5">
+                    <ClipboardList className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Explorations déjà enregistrées dans le dossier ({patientExplorations.length}) :</span>
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {patientExplorations.slice(0, 6).map(exp => (
+                      <span key={exp.id} className="text-[10px] bg-white border border-blue-200 px-2 py-1 rounded-lg text-slate-700">
+                        <strong>{exp.title}</strong> ({exp.date}) — <span className="font-bold text-blue-800">{exp.simpleStatus || exp.status}</span>
+                        {exp.narrativeReport ? ` : ${exp.narrativeReport.slice(0, 45)}...` : ''}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Quick Packs / Checkboxes preserved */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                 {[
-                  { key: 'geneXpertBK', label: 'GeneXpert MTB/RIF (Crachats)', tag: 'PNT' },
-                  { key: 'chestXray', label: 'Radiographie Thoracique Face/Profil', tag: 'Radio' },
-                  { key: 'bloodGas', label: 'Gazométrie Artérielle (Air ambiant)', tag: 'Urgences' },
-                  { key: 'nfsCrp', label: 'NFS + CRP + Glycémie', tag: 'Bio' },
-                  { key: 'chestCT', label: 'Scanner Thoracique TDM-HR', tag: 'Imagerie' },
-                  { key: 'spirometry', label: 'EFR / Spirométrie + Réversibilité', tag: 'Fonctionnel' },
-                  { key: 'pleuralPuncture', label: 'Ponction Pleurale (Biochimie/Cyto)', tag: 'Geste' }
+                  { key: 'geneXpertBK', label: 'GeneXpert MTB/RIF', tag: 'PNT' },
+                  { key: 'chestXray', label: 'Radio Thorax F/P', tag: 'Imagerie' },
+                  { key: 'bloodGas', label: 'Gaz du sang', tag: 'Biologie' },
+                  { key: 'nfsCrp', label: 'NFS + CRP', tag: 'Biologie' },
+                  { key: 'chestCT', label: 'Scanner TDM-HR', tag: 'Imagerie' },
+                  { key: 'spirometry', label: 'EFR / Spirométrie', tag: 'EFR' },
+                  { key: 'pleuralPuncture', label: 'Ponction Pleurale', tag: 'Microbio' }
                 ].map(item => (
-                  <label key={item.key} className="flex items-start gap-2.5 p-3 bg-slate-50 hover:bg-slate-100/70 rounded-xl border border-slate-200 cursor-pointer transition">
+                  <label key={item.key} className="flex items-start gap-2 p-2.5 bg-slate-50 hover:bg-slate-100/70 rounded-xl border border-slate-200 cursor-pointer transition">
                     <input
                       type="checkbox"
                       checked={Boolean((form12Steps.paraclinicalOrdered as any)[item.key])}
@@ -3794,16 +4858,311 @@ export const Consultations: React.FC = () => {
                       className="h-4 w-4 text-teal-600 rounded mt-0.5"
                     />
                     <div>
-                      <span className="font-bold text-xs text-slate-800 block">{item.label}</span>
+                      <span className="font-bold text-[11px] text-slate-800 block">{item.label}</span>
                       <span className="text-[10px] text-teal-700 font-mono font-semibold">{item.tag}</span>
                     </div>
                   </label>
                 ))}
               </div>
 
+              {/* A-F Categorized Catalog Selector */}
+              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                <div className="flex flex-wrap gap-1.5">
+                  {PARACLINICAL_CATALOG.map(cat => (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => setSelectedMacroCat(cat.id)}
+                      className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition cursor-pointer ${
+                        selectedMacroCat === cat.id
+                          ? 'bg-teal-700 text-white border-teal-800 shadow-2xs'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-teal-50'
+                      }`}
+                    >
+                      {cat.letter}. {cat.label}
+                    </button>
+                  ))}
+                </div>
+
+                {(() => {
+                  const activeCat = PARACLINICAL_CATALOG.find(c => c.id === selectedMacroCat) || PARACLINICAL_CATALOG[0];
+                  return (
+                    <div className="space-y-2.5">
+                      {activeCat.subCategories.map(sub => (
+                        <div key={sub.id} className="bg-white p-2.5 rounded-lg border border-slate-200 space-y-1.5">
+                          <span className="text-[10px] font-extrabold uppercase text-slate-500 block">{sub.label}</span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {sub.exams.map(exName => (
+                              <button
+                                key={exName}
+                                type="button"
+                                onClick={() => handleAddDetailedExam(activeCat.id, sub.label, exName)}
+                                className="text-[11px] px-2.5 py-1 bg-slate-50 hover:bg-teal-50 hover:text-teal-900 border border-slate-200 rounded-md font-medium transition cursor-pointer"
+                              >
+                                + {exName}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={customExamName}
+                          onChange={(e) => setCustomExamName(e.target.value)}
+                          placeholder={`Ajouter un examen libre dans ${activeCat.label}...`}
+                          className="flex-1 text-xs bg-white border border-slate-200 rounded-lg px-3 py-1.5"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!customExamName.trim()) return;
+                            handleAddDetailedExam(
+                              activeCat.id,
+                              activeCat.subCategories[0]?.label || 'Autres',
+                              customExamName.trim()
+                            );
+                            setCustomExamName('');
+                          }}
+                          className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold cursor-pointer"
+                        >
+                          + Ajouter
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Detailed Prescribed Exams Cards */}
+              {(form12Steps.paraclinicalOrdered.orderedExamsDetailed || []).length > 0 && (
+                <div className="space-y-3">
+                  <span className="text-xxs font-extrabold uppercase text-slate-700 block">
+                    Examens prescrits & résultats saisis ({form12Steps.paraclinicalOrdered.orderedExamsDetailed?.length}) :
+                  </span>
+                  {(form12Steps.paraclinicalOrdered.orderedExamsDetailed || []).map(exam => {
+                    const isSpiro =
+                      exam.macroCategory === 'EFR' ||
+                      /spirom|efr/i.test(exam.examName);
+                    const vemsGain =
+                      exam.spirometryData?.vemsPreL && exam.spirometryData?.vemsPostL
+                        ? Number((((exam.spirometryData.vemsPostL - exam.spirometryData.vemsPreL) / exam.spirometryData.vemsPreL) * 100).toFixed(1))
+                        : exam.spirometryData?.reversibilityGainPct;
+
+                    return (
+                      <div key={exam.id} className="p-3.5 bg-white rounded-xl border border-slate-200 space-y-2.5 shadow-2xs">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-2">
+                          <div>
+                            <span className="text-[10px] font-bold uppercase text-teal-700">
+                              {exam.macroCategory} • {exam.subCategory}
+                            </span>
+                            <h4 className="text-xs font-black text-slate-900">{exam.examName}</h4>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <select
+                              value={exam.status}
+                              onChange={(e) => handleUpdateDetailedExam(exam.id, { status: e.target.value as any })}
+                              className="text-[11px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 font-bold"
+                            >
+                              <option value="PRESCRIT">Prescrit</option>
+                              <option value="EN_ATTENTE">En attente</option>
+                              <option value="REALISE">Réalisé</option>
+                            </select>
+                            <input
+                              type="date"
+                              value={exam.prescribedDate || ''}
+                              onChange={(e) => handleUpdateDetailedExam(exam.id, { prescribedDate: e.target.value })}
+                              title="Date de prescription"
+                              className="text-[11px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 font-mono"
+                            />
+                            <input
+                              type="date"
+                              value={exam.realizedDate || ''}
+                              onChange={(e) => handleUpdateDetailedExam(exam.id, { realizedDate: e.target.value })}
+                              title="Date de réalisation"
+                              className="text-[11px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 font-mono"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveDetailedExam(exam.id)}
+                              className="p-1 text-slate-400 hover:text-rose-600 cursor-pointer"
+                              title="Retirer cet examen"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Results text + dictation */}
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <label className="text-[10px] font-bold text-slate-600">Compte-rendu / Résultats saisis :</label>
+                            <VoiceDictationButton
+                              value={exam.resultsText || ''}
+                              onTranscript={(t) => handleUpdateDetailedExam(exam.id, { resultsText: t, status: 'REALISE' })}
+                              fieldName={`Résultat ${exam.examName}`}
+                              buttonText="Dicter le résultat"
+                              size="sm"
+                              appendMode={true}
+                            />
+                          </div>
+                          <textarea
+                            rows={2}
+                            value={exam.resultsText || ''}
+                            onChange={(e) => handleUpdateDetailedExam(exam.id, { resultsText: e.target.value })}
+                            placeholder="Saisir ou dicter les résultats de l'examen..."
+                            className="w-full text-xs bg-slate-50 border border-slate-200 rounded-lg p-2"
+                          />
+                        </div>
+
+                        {/* Structured Spirometry fields */}
+                        {isSpiro && (
+                          <div className="p-2.5 bg-teal-50/50 rounded-lg border border-teal-200 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-extrabold uppercase text-teal-900">
+                                Paramètres Spirométriques Structurés (Pré / Post-BD)
+                              </span>
+                              {vemsGain !== undefined && (
+                                <span className="text-[10px] font-bold bg-white px-2 py-0.5 rounded border border-teal-200 text-teal-800">
+                                  Réversibilité VEMS : {vemsGain > 0 ? `+${vemsGain}%` : `${vemsGain}%`}
+                                </span>
+                              )}
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px]">
+                              <div>
+                                <label className="text-[10px] text-slate-600 block">VEMS pré (L)</label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={exam.spirometryData?.vemsPreL ?? ''}
+                                  onChange={(e) => handleUpdateDetailedExam(exam.id, {
+                                    spirometryData: { ...exam.spirometryData, vemsPreL: e.target.value === '' ? undefined : Number(e.target.value) }
+                                  })}
+                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-slate-600 block">VEMS pré (%)</label>
+                                <input
+                                  type="number"
+                                  value={exam.spirometryData?.vemsPrePct ?? ''}
+                                  onChange={(e) => handleUpdateDetailedExam(exam.id, {
+                                    spirometryData: { ...exam.spirometryData, vemsPrePct: e.target.value === '' ? undefined : Number(e.target.value) }
+                                  })}
+                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-slate-600 block">CVF pré (%)</label>
+                                <input
+                                  type="number"
+                                  value={exam.spirometryData?.cvfPrePct ?? ''}
+                                  onChange={(e) => handleUpdateDetailedExam(exam.id, {
+                                    spirometryData: { ...exam.spirometryData, cvfPrePct: e.target.value === '' ? undefined : Number(e.target.value) }
+                                  })}
+                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-slate-600 block">VEMS/CVF (%)</label>
+                                <input
+                                  type="number"
+                                  value={exam.spirometryData?.vemsCvfPrePct ?? ''}
+                                  onChange={(e) => handleUpdateDetailedExam(exam.id, {
+                                    spirometryData: { ...exam.spirometryData, vemsCvfPrePct: e.target.value === '' ? undefined : Number(e.target.value) }
+                                  })}
+                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] text-slate-600 block">VEMS post-BD (L)</label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={exam.spirometryData?.vemsPostL ?? ''}
+                                  onChange={(e) => handleUpdateDetailedExam(exam.id, {
+                                    spirometryData: { ...exam.spirometryData, vemsPostL: e.target.value === '' ? undefined : Number(e.target.value) }
+                                  })}
+                                  className="w-full bg-white border border-slate-200 rounded p-1 font-mono"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Attachment Upload (Photo / PDF / DICOM) & Follow-up entries */}
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-100 text-[11px]">
+                          <label className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg cursor-pointer font-semibold">
+                            <Upload className="w-3.5 h-3.5" />
+                            <span>Joindre Photo / PDF / DICOM</span>
+                            <input
+                              type="file"
+                              accept="image/*,.pdf,.dcm,.dicom"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) handleExamAttachmentUpload(exam.id, file);
+                              }}
+                            />
+                          </label>
+
+                          {exam.attachmentName && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-teal-50 text-teal-800 border border-teal-200 rounded-md font-medium">
+                              <Paperclip className="w-3 h-3" />
+                              <span>{exam.attachmentName} ({exam.attachmentType})</span>
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Multiple Follow-up results */}
+                        <div className="space-y-1.5 pt-1">
+                          {(exam.followUpEntries || []).map(fu => (
+                            <div key={fu.id} className="text-[11px] bg-slate-50 px-2.5 py-1 rounded border border-slate-200 flex items-center justify-between">
+                              <span>
+                                <strong className="font-mono text-slate-600">{fu.date}</strong> : {fu.summary}
+                              </span>
+                            </div>
+                          ))}
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="text"
+                              value={newFollowUpInputs[exam.id] || ''}
+                              onChange={(e) => setNewFollowUpInputs(prev => ({ ...prev, [exam.id]: e.target.value }))}
+                              placeholder="Ajouter un résultat de contrôle ultérieur..."
+                              className="flex-1 text-[11px] bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const txt = (newFollowUpInputs[exam.id] || '').trim();
+                                if (!txt) return;
+                                const nextFu = [
+                                  ...(exam.followUpEntries || []),
+                                  {
+                                    id: `fu-${Date.now()}`,
+                                    date: new Date().toISOString().split('T')[0],
+                                    summary: txt
+                                  }
+                                ];
+                                handleUpdateDetailedExam(exam.id, { followUpEntries: nextFu });
+                                setNewFollowUpInputs(prev => ({ ...prev, [exam.id]: '' }));
+                              }}
+                              className="text-[11px] px-2.5 py-1 bg-slate-700 hover:bg-slate-800 text-white rounded-lg font-bold cursor-pointer"
+                            >
+                              + Suivi
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               <div>
                 <label className="text-xxs font-bold text-slate-600 block mb-1">
-                  Indications cliniques et précisions pour les explorations
+                  Indications cliniques et précisions complémentaires pour les explorations
                 </label>
                 <textarea
                   rows={2}
@@ -3941,6 +5300,9 @@ export const Consultations: React.FC = () => {
                   ))}
                 </div>
               </div>
+
+              {/* Contextual Clinical Scores suggested according to Retained Diagnoses */}
+              {renderContextualClinicalScores()}
             </div>
           )}
 
@@ -4772,8 +6134,9 @@ export const Consultations: React.FC = () => {
                   <p><span className="text-slate-500 font-medium">Nom & Prénom :</span> <strong className="text-slate-950 font-bold uppercase">{selectedPatient?.lastName}</strong> <strong className="text-slate-900">{selectedPatient?.firstName}</strong></p>
                   <p><span className="text-slate-500 font-medium">N° IP / Dossier :</span> <strong className="font-mono text-teal-800 font-bold">{selectedPatient?.code}</strong> (N° Hosp: <span className="font-mono">{selectedPatient?.hospitalNumber || 'CHREIN-PNEUMO'}</span>)</p>
                   <p><span className="text-slate-500 font-medium">Date Naiss. / Âge :</span> <strong>{selectedPatient?.birthDate ? `${new Date(selectedPatient.birthDate).toLocaleDateString('fr-FR')} (${selectedPatient.age} ans)` : `${selectedPatient?.age} ans`} ({selectedPatient?.gender === 'M' ? 'Masculin' : 'Féminin'})</strong></p>
+                  <p><span className="text-slate-500 font-medium">Situation / Études :</span> <span>{form12Steps.maritalStatus || selectedPatient?.maritalStatus || 'Non renseigné'} • {form12Steps.educationLevel || selectedPatient?.educationLevel || 'Non renseigné'}</span></p>
                   <p><span className="text-slate-500 font-medium">Domicile :</span> <span>{selectedPatient?.district ? `${selectedPatient.district}, Kaolack` : selectedPatient?.address || 'Kaolack, Sénégal'}</span></p>
-                  <p><span className="text-slate-500 font-medium">Téléphone :</span> <span className="font-mono">{selectedPatient?.phone || 'Non renseigné'}</span></p>
+                  <p><span className="text-slate-500 font-medium">Téléphone :</span> <span className="font-mono">{form12Steps.emergencyPhone || selectedPatient?.phone || 'Non renseigné'}</span></p>
                   {selectedPatient?.bloodGroup && (
                     <p><span className="text-slate-500 font-medium">Groupe Sanguin :</span> <strong className="font-mono text-rose-700">{selectedPatient.bloodGroup}</strong></p>
                   )}
@@ -4802,6 +6165,12 @@ export const Consultations: React.FC = () => {
                     <h4 className="font-black uppercase text-teal-900 text-xxs border-b pb-1">1. Motif de Consultation & Anamnèse</h4>
                     <p className="leading-relaxed"><strong>Motif principal :</strong> {form12Steps.chiefComplaint || 'Non spécifié'}</p>
                     <p className="leading-relaxed text-slate-700"><strong>Histoire de la maladie :</strong> {form12Steps.historyOfIllness || 'Aucune précision complémentaire.'}</p>
+                    {form12Steps.mmrcGrade !== undefined && (
+                      <p className="text-xxs text-teal-900"><strong>Dyspnée mMRC :</strong> Stade {form12Steps.mmrcGrade}</p>
+                    )}
+                    {form12Steps.antecedentsText && (
+                      <p className="text-xxs text-slate-700"><strong>Antécédents :</strong> {form12Steps.antecedentsText}</p>
+                    )}
                   </div>
 
                   <div className="avoid-page-break p-3.5 bg-white border border-slate-200 rounded-xl space-y-2">
@@ -4810,19 +6179,36 @@ export const Consultations: React.FC = () => {
                       <div><span className="block text-slate-400 text-3xs">TA</span><strong>{form12Steps.vitals.bp || '--/--'}</strong></div>
                       <div><span className="block text-slate-400 text-3xs">FC</span><strong>{form12Steps.vitals.pulse || '--'} bpm</strong></div>
                       <div><span className="block text-slate-400 text-3xs">FR</span><strong>{form12Steps.vitals.rr || '--'}/min</strong></div>
-                      <div><span className="block text-slate-400 text-3xs">SpO2</span><strong>{form12Steps.vitals.spo2Ambient || '--'}%</strong></div>
+                      <div>
+                        <span className="block text-slate-400 text-3xs">SpO2</span>
+                        <strong>
+                          {form12Steps.vitals.spo2Mode === 'SOUS_O2'
+                            ? `${form12Steps.vitals.spo2O2 || '--'}% (${form12Steps.vitals.o2FlowLiters || 0}L ${form12Steps.vitals.o2Device || 'O2'})`
+                            : `${form12Steps.vitals.spo2Ambient || '--'}% (AA)`}
+                        </strong>
+                      </div>
                       <div><span className="block text-slate-400 text-3xs">T°</span><strong>{form12Steps.vitals.temperature || '--'}°C</strong></div>
-                      <div><span className="block text-slate-400 text-3xs">Poids</span><strong>{form12Steps.vitals.weight || '--'} kg</strong></div>
+                      <div><span className="block text-slate-400 text-3xs">Poids / IMC</span><strong>{form12Steps.vitals.weight || '--'}kg {bmiCalculation ? `(${bmiCalculation.value})` : ''}</strong></div>
                     </div>
                     <div className="space-y-1 text-slate-700 text-xxs leading-relaxed">
                       {form12Steps.systems.pulmonaryVesicularBreath && <p><strong>Murmure vésiculaire :</strong> {form12Steps.systems.pulmonaryVesicularBreath}</p>}
-                      {form12Steps.systems.pulmonaryCrackles && <p><strong>Râles / Auscultation :</strong> {form12Steps.systems.pulmonaryCrackles}</p>}
-                      {form12Steps.systems.cardiovascular && <p><strong>Examen cardiovasculaire :</strong> {form12Steps.systems.cardiovascular}</p>}
+                      {form12Steps.systems.pulmonaryCrackles && <p><strong>Râles crépitants :</strong> {form12Steps.systems.pulmonaryCrackles}</p>}
+                      {form12Steps.systems.pulmonaryWheezes && <p><strong>Sibilants :</strong> {form12Steps.systems.pulmonaryWheezes}</p>}
+                      {form12Steps.systems.cardiovascular && <p><strong>Cardiovasculaire :</strong> {form12Steps.systems.cardiovascular}</p>}
+                      {form12Steps.systems.abdomen && <p><strong>Abdomen :</strong> {form12Steps.systems.abdomen}</p>}
+                      {form12Steps.systems.neurological && <p><strong>Neurologique :</strong> {form12Steps.systems.neurological}</p>}
                     </div>
                   </div>
 
+                  {form12Steps.syndromicSummary && (
+                    <div className="avoid-page-break p-3.5 bg-white border border-slate-200 rounded-xl space-y-1.5">
+                      <h4 className="font-black uppercase text-teal-900 text-xxs border-b pb-1">3. Résumé Syndromique</h4>
+                      <p className="whitespace-pre-line text-slate-800 leading-relaxed">{form12Steps.syndromicSummary}</p>
+                    </div>
+                  )}
+
                   <div className="avoid-page-break p-3.5 bg-white border border-slate-200 rounded-xl space-y-1.5">
-                    <h4 className="font-black uppercase text-teal-900 text-xxs border-b pb-1">3. Diagnostics Retenus (Codification CIM-11)</h4>
+                    <h4 className="font-black uppercase text-teal-900 text-xxs border-b pb-1">4. Diagnostics Retenus (CIM-11) & Scores</h4>
                     {form12Steps.diagnoses && form12Steps.diagnoses.length > 0 ? (
                       <ul className="list-disc pl-4 space-y-1 text-slate-800">
                         {form12Steps.diagnoses.map(d => (
@@ -4832,10 +6218,16 @@ export const Consultations: React.FC = () => {
                     ) : (
                       <p className="text-slate-500 italic">Aucun diagnostic codifié renseigné.</p>
                     )}
+                    {patientScoresToday.length > 0 && (
+                      <p className="text-xxs text-slate-700 pt-1">
+                        <strong>Scores cliniques calculés :</strong>{' '}
+                        {patientScoresToday.slice(0, 4).map(s => `${s.scoreName} = ${s.calculatedValue}`).join(' ; ')}
+                      </p>
+                    )}
                   </div>
 
                   <div className="avoid-page-break p-3.5 bg-white border border-slate-200 rounded-xl space-y-1.5">
-                    <h4 className="font-black uppercase text-teal-900 text-xxs border-b pb-1">4. Conduite Thérapeutique & Traitement</h4>
+                    <h4 className="font-black uppercase text-teal-900 text-xxs border-b pb-1">5. Conduite Thérapeutique & Traitement</h4>
                     <p className="font-sans whitespace-pre-line text-slate-900 text-xs leading-relaxed font-medium">
                       {form12Steps.managementPlan.medicationsPrescribed || 'Plan de soins en cours de stabilisation.'}
                     </p>
@@ -4875,6 +6267,11 @@ export const Consultations: React.FC = () => {
                       {form12Steps.paraclinicalOrdered.chestCT && <li><strong>Scanner Thoracique (TDM-HR)</strong> haute résolution</li>}
                       {form12Steps.paraclinicalOrdered.spirometry && <li><strong>EFR / Spirométrie</strong> avec test de réversibilité aux bronchodilatateurs</li>}
                       {form12Steps.paraclinicalOrdered.pleuralPuncture && <li><strong>Ponction pleurale</strong> avec analyse biochimique (protéines, LDH) et cytologique</li>}
+                      {(form12Steps.paraclinicalOrdered.orderedExamsDetailed || []).map(ex => (
+                        <li key={ex.id}>
+                          <strong>{ex.examName}</strong> ({ex.macroCategory} — {ex.status}){ex.resultsText ? ` : ${ex.resultsText}` : ''}
+                        </li>
+                      ))}
                     </ul>
                     {form12Steps.paraclinicalOrdered.otherNotes && (
                       <div className="pt-2 border-t border-slate-200">

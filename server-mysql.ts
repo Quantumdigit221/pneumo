@@ -203,6 +203,30 @@ export async function ensureTablesExist(force: boolean = false) {
     try {
       await connection.query(`ALTER TABLE patients ADD COLUMN emergencyContact TEXT NULL`);
     } catch (_) {}
+    try {
+      await connection.query(`ALTER TABLE patients ADD COLUMN hospitalNumber VARCHAR(100) NULL`);
+    } catch (_) {}
+    try {
+      await connection.query(`ALTER TABLE patients ADD COLUMN profession VARCHAR(255) NULL`);
+    } catch (_) {}
+    try {
+      await connection.query(`ALTER TABLE patients ADD COLUMN emergencyPhone VARCHAR(50) NULL`);
+    } catch (_) {}
+    try {
+      await connection.query(`ALTER TABLE patients ADD COLUMN maritalStatus VARCHAR(60) NULL`);
+    } catch (_) {}
+    try {
+      await connection.query(`ALTER TABLE patients ADD COLUMN educationLevel VARCHAR(60) NULL`);
+    } catch (_) {}
+    try {
+      await connection.query(`ALTER TABLE patients ADD COLUMN chronicConditions TEXT NULL`);
+    } catch (_) {}
+    try {
+      await connection.query(`ALTER TABLE patients ADD COLUMN smokingHistory LONGTEXT NULL`);
+    } catch (_) {}
+    try {
+      await connection.query(`ALTER TABLE patients ADD COLUMN dpiDetails LONGTEXT NULL`);
+    } catch (_) {}
 
     // 4. Tickets Table
     await connection.query(`
@@ -378,6 +402,15 @@ export async function ensureTablesExist(force: boolean = false) {
         updatedAt VARCHAR(100)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     `);
+    try {
+      await connection.query(`ALTER TABLE consultations ADD COLUMN chiefComplaint TEXT NULL`);
+    } catch (_) {}
+    try {
+      await connection.query(`ALTER TABLE consultations ADD COLUMN twelveSteps LONGTEXT NULL`);
+    } catch (_) {}
+    try {
+      await connection.query(`ALTER TABLE consultations ADD COLUMN aiAssistance LONGTEXT NULL`);
+    } catch (_) {}
 
     // 9. Lab Results Table
     await connection.query(`
@@ -562,7 +595,7 @@ function getTableColumns(tableName: string): string[] {
     case 'users':
       return ['id', 'centerId', 'name', 'email', 'role', 'specialty', 'phone', 'avatarUrl', 'password'];
     case 'patients':
-      return ['id', 'centerId', 'code', 'firstName', 'lastName', 'birthDate', 'age', 'gender', 'phone', 'address', 'email', 'bloodGroup', 'allergies', 'emergencyContact', 'createdAt'];
+      return ['id', 'centerId', 'code', 'hospitalNumber', 'firstName', 'lastName', 'birthDate', 'age', 'gender', 'phone', 'address', 'email', 'bloodGroup', 'allergies', 'emergencyContact', 'emergencyPhone', 'profession', 'maritalStatus', 'educationLevel', 'chronicConditions', 'smokingHistory', 'dpiDetails', 'createdAt'];
     case 'tickets':
       return ['id', 'centerId', 'ticketNumber', 'patientId', 'patientName', 'patientAge', 'patientGender', 'patientPhone', 'patientAddress', 'serviceId', 'serviceName', 'serviceCategory', 'amount', 'paymentMethod', 'status', 'doctorId', 'insuranceId', 'insuranceCoverage', 'createdAt'];
     case 'services':
@@ -572,7 +605,7 @@ function getTableColumns(tableName: string): string[] {
     case 'sales':
       return ['id', 'centerId', 'ticketId', 'patientName', 'items', 'totalAmount', 'paymentMethod', 'createdAt'];
     case 'consultations':
-      return ['id', 'centerId', 'ticketId', 'patientId', 'doctorId', 'patientName', 'doctorName', 'serviceName', 'date', 'weight', 'temperature', 'bloodPressure', 'symptoms', 'diagnosis', 'prescription', 'prescriptionItems', 'status', 'createdAt', 'updatedAt'];
+      return ['id', 'centerId', 'ticketId', 'patientId', 'doctorId', 'patientName', 'doctorName', 'serviceName', 'date', 'weight', 'temperature', 'bloodPressure', 'chiefComplaint', 'symptoms', 'diagnosis', 'prescription', 'prescriptionItems', 'twelveSteps', 'aiAssistance', 'status', 'createdAt', 'updatedAt'];
     case 'lab_results':
       return ['id', 'centerId', 'patientId', 'patientName', 'testName', 'category', 'status', 'value', 'unit', 'referenceRange', 'notes', 'authorizedBy', 'createdAt', 'updatedAt'];
     case 'appointments':
@@ -618,12 +651,44 @@ export async function queryAll(tableName: string): Promise<any[]> {
           row.items = [];
         }
       }
+      if (tableName === 'patients') {
+        if (row.smokingHistory && typeof row.smokingHistory === 'string') {
+          try {
+            row.smokingHistory = JSON.parse(row.smokingHistory);
+          } catch (e) {
+            row.smokingHistory = undefined;
+          }
+        }
+        if (row.dpiDetails && typeof row.dpiDetails === 'string') {
+          try {
+            const parsedDpi = JSON.parse(row.dpiDetails);
+            if (parsedDpi && typeof parsedDpi === 'object') {
+              Object.assign(row, parsedDpi);
+            }
+          } catch (e) {}
+          delete row.dpiDetails;
+        }
+      }
       if (tableName === 'consultations') {
         if (row.prescriptionItems && typeof row.prescriptionItems === 'string') {
           try {
             row.prescriptionItems = JSON.parse(row.prescriptionItems);
           } catch (e) {
             row.prescriptionItems = [];
+          }
+        }
+        if (row.twelveSteps && typeof row.twelveSteps === 'string') {
+          try {
+            row.twelveSteps = JSON.parse(row.twelveSteps);
+          } catch (e) {
+            row.twelveSteps = undefined;
+          }
+        }
+        if (row.aiAssistance && typeof row.aiAssistance === 'string') {
+          try {
+            row.aiAssistance = JSON.parse(row.aiAssistance);
+          } catch (e) {
+            row.aiAssistance = undefined;
           }
         }
       }
@@ -722,9 +787,30 @@ export async function saveItem(tableName: string, item: any): Promise<boolean> {
     if (tableName === 'sales' && preparedItem.items && typeof preparedItem.items !== 'string') {
       preparedItem.items = JSON.stringify(preparedItem.items);
     }
+    if (tableName === 'patients') {
+      const dpiPayload: Record<string, any> = {};
+      if (preparedItem.medicalAntecedents !== undefined) dpiPayload.medicalAntecedents = preparedItem.medicalAntecedents;
+      if (preparedItem.consumptions !== undefined) dpiPayload.consumptions = preparedItem.consumptions;
+      if (preparedItem.occupationalExposures !== undefined) dpiPayload.occupationalExposures = preparedItem.occupationalExposures;
+      if (preparedItem.surgicalHistory !== undefined) dpiPayload.surgicalHistory = preparedItem.surgicalHistory;
+      if (preparedItem.obgynHistory !== undefined) dpiPayload.obgynHistory = preparedItem.obgynHistory;
+      if (preparedItem.district !== undefined) dpiPayload.district = preparedItem.district;
+      if (preparedItem.region !== undefined) dpiPayload.region = preparedItem.region;
+      if (preparedItem.notes !== undefined) dpiPayload.notes = preparedItem.notes;
+      preparedItem.dpiDetails = Object.keys(dpiPayload).length > 0 ? JSON.stringify(dpiPayload) : null;
+      if (preparedItem.smokingHistory && typeof preparedItem.smokingHistory !== 'string') {
+        preparedItem.smokingHistory = JSON.stringify(preparedItem.smokingHistory);
+      }
+    }
     if (tableName === 'consultations') {
       if (preparedItem.prescriptionItems && typeof preparedItem.prescriptionItems !== 'string') {
         preparedItem.prescriptionItems = JSON.stringify(preparedItem.prescriptionItems);
+      }
+      if (preparedItem.twelveSteps && typeof preparedItem.twelveSteps !== 'string') {
+        preparedItem.twelveSteps = JSON.stringify(preparedItem.twelveSteps);
+      }
+      if (preparedItem.aiAssistance && typeof preparedItem.aiAssistance !== 'string') {
+        preparedItem.aiAssistance = JSON.stringify(preparedItem.aiAssistance);
       }
     }
     if (tableName === 'hospitalizations') {

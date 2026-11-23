@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useStore } from '../store';
-import { Patient, SpecializedPneumoRecord } from '../types';
+import { EducationLevel, MaritalStatus, Patient, SpecializedPneumoRecord } from '../types';
 import {
   Users,
   Search,
@@ -31,6 +31,14 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { SpecializedSheetModal, SPECIALIZED_FORM_CONFIGS } from '../components/SpecializedSheetModal';
+import {
+  PatientDpiHistoryEditor,
+  DpiAntecedentsValue,
+  createEmptyDpiAntecedents,
+  buildDpiFromPatient,
+  extractConsumptionsFromDpi
+} from '../components/PatientDpiHistoryEditor';
+import { EDUCATION_LEVEL_OPTIONS, MARITAL_STATUS_OPTIONS, OCCUPATIONAL_EXPOSURE_OPTIONS } from '../utils/dpiConstants';
 
 export const Patients: React.FC = () => {
   const {
@@ -52,6 +60,7 @@ export const Patients: React.FC = () => {
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(patients[0]?.id || null);
   const [activeTab, setActiveTab] = useState<'info' | 'consultations' | 'hospitalizations' | 'specialized' | 'scores' | 'explorations' | 'documents'>('info');
   const [showNewPatientModal, setShowNewPatientModal] = useState(false);
+  const [showEditPatientModal, setShowEditPatientModal] = useState(false);
 
   // Specialized sheets modal state
   const [selectedSpecializedRecord, setSelectedSpecializedRecord] = useState<SpecializedPneumoRecord | null>(null);
@@ -66,17 +75,39 @@ export const Patients: React.FC = () => {
     lastName: '',
     birthDate: '1985-06-15',
     age: 41,
-    gender: 'M' as const,
+    gender: 'M' as 'M' | 'F',
     phone: '+221 ',
     address: 'Kaolack',
     hospitalNumber: 'CHREIN-PNEUMO-2026-',
     profession: '',
+    maritalStatus: 'Non renseigné' as MaritalStatus,
+    educationLevel: 'Non renseigné' as EducationLevel,
     emergencyContact: '',
+    emergencyPhone: '',
     allergies: '',
-    chronicConditions: '',
-    smokingPackYears: 0,
-    biomassExposure: false
+    chronicConditions: ''
   });
+  const [newPatientDpi, setNewPatientDpi] = useState<DpiAntecedentsValue>(() => createEmptyDpiAntecedents());
+
+  // Edit patient modal state
+  const [editPatientForm, setEditPatientForm] = useState({
+    firstName: '',
+    lastName: '',
+    birthDate: '1985-06-15',
+    age: 40,
+    gender: 'M' as 'M' | 'F',
+    phone: '',
+    address: '',
+    hospitalNumber: '',
+    profession: '',
+    maritalStatus: 'Non renseigné' as MaritalStatus,
+    educationLevel: 'Non renseigné' as EducationLevel,
+    emergencyContact: '',
+    emergencyPhone: '',
+    allergies: '',
+    chronicConditions: ''
+  });
+  const [editPatientDpi, setEditPatientDpi] = useState<DpiAntecedentsValue>(() => createEmptyDpiAntecedents());
 
   // Duplicate warning detection (Section 3)
   const potentialDuplicates = useMemo(() => {
@@ -97,12 +128,12 @@ export const Patients: React.FC = () => {
       .filter(p => {
         const query = searchTerm.toLowerCase();
         return (
-          p.firstName.toLowerCase().includes(query) ||
-          p.lastName.toLowerCase().includes(query) ||
-          p.code.toLowerCase().includes(query) ||
-          (p.hospitalNumber && p.hospitalNumber.toLowerCase().includes(query)) ||
-          p.phone.includes(query) ||
-          (p.chronicConditions && p.chronicConditions.toLowerCase().includes(query))
+          (p.firstName || '').toLowerCase().includes(query) ||
+          (p.lastName || '').toLowerCase().includes(query) ||
+          (p.code || '').toLowerCase().includes(query) ||
+          (p.hospitalNumber || '').toLowerCase().includes(query) ||
+          (p.phone || '').includes(query) ||
+          (p.chronicConditions || '').toLowerCase().includes(query)
         );
       });
   }, [patients, currentCenter, searchTerm]);
@@ -117,36 +148,128 @@ export const Patients: React.FC = () => {
   const patientExplorations = medicalExplorations.filter(e => e.patientId === selectedPatient?.id);
   const patientDocuments = medicalDocuments.filter(d => d.patientId === selectedPatient?.id);
 
-  const handleCreatePatient = (e: React.FormEvent) => {
+  const handleCreatePatient = async (e: React.FormEvent) => {
     e.preventDefault();
-    const newCode = `IP-2026-${String(patients.length + 1).padStart(4, '0')}`;
-    const newRecord: Patient = {
-      id: 'p-' + Date.now(),
-      centerId: currentCenter?.id || 'center-1',
-      code: newCode,
-      hospitalNumber: newPatientForm.hospitalNumber || `CHREIN-${newCode}`,
+    const combinedChronic = [
+      ...newPatientDpi.medicalAntecedents,
+      ...(newPatientDpi.medicalAntecedentsOther ? [newPatientDpi.medicalAntecedentsOther] : []),
+      ...(newPatientForm.chronicConditions ? [newPatientForm.chronicConditions] : [])
+    ]
+      .filter((v, i, arr) => v && arr.indexOf(v) === i)
+      .join(', ');
+
+    const consumptions = extractConsumptionsFromDpi(newPatientDpi);
+    const created = await addPatient({
+      hospitalNumber: newPatientForm.hospitalNumber || `CHREIN-2026-${String(patients.length + 1).padStart(3, '0')}`,
       firstName: newPatientForm.firstName,
       lastName: newPatientForm.lastName,
       birthDate: newPatientForm.birthDate,
-      age: Number(newPatientForm.age || 40),
       gender: newPatientForm.gender,
       phone: newPatientForm.phone,
       address: newPatientForm.address,
-      profession: newPatientForm.profession,
+      profession: newPatientForm.profession || newPatientDpi.occupationalProfile.currentProfession,
+      maritalStatus: newPatientForm.maritalStatus,
+      educationLevel: newPatientForm.educationLevel,
       emergencyContact: newPatientForm.emergencyContact,
+      emergencyPhone: newPatientForm.emergencyPhone,
       allergies: newPatientForm.allergies,
-      chronicConditions: newPatientForm.chronicConditions,
-      smokingHistory: {
-        isSmoker: newPatientForm.smokingPackYears > 0,
-        packYears: Number(newPatientForm.smokingPackYears || 0),
-        biomassExposure: newPatientForm.biomassExposure
+      chronicConditions: combinedChronic,
+      medicalAntecedents: {
+        selected: newPatientDpi.medicalAntecedents,
+        other: newPatientDpi.medicalAntecedentsOther
       },
-      createdAt: new Date().toISOString()
-    };
+      smokingHistory: {
+        isSmoker: newPatientDpi.smokingStatus !== 'JAMAIS',
+        status: newPatientDpi.smokingStatus,
+        cigarettesPerDay: newPatientDpi.cigarettesPerDay,
+        durationYears: newPatientDpi.smokingDurationYears,
+        stoppedYear: newPatientDpi.smokingStoppedYear,
+        packYears: newPatientDpi.smokingPackYears,
+        periods: newPatientDpi.smokingPeriods,
+        biomassExposure: newPatientDpi.biomassExposure || newPatientDpi.occupationalProfile.exposures.includes('BIOMASSE'),
+        passiveSmoking: newPatientDpi.passiveSmoking
+      },
+      consumptions,
+      occupationalExposures: newPatientDpi.occupationalProfile,
+      surgicalHistory: newPatientDpi.surgicalHistory,
+      obgynHistory: newPatientForm.gender === 'F' ? newPatientDpi.obgynHistory : undefined
+    });
 
-    addPatient(newRecord);
-    setSelectedPatientId(newRecord.id);
+    if (created) {
+      setSelectedPatientId(created.id);
+    }
     setShowNewPatientModal(false);
+    setNewPatientDpi(createEmptyDpiAntecedents());
+  };
+
+  const openEditPatientModal = (p: Patient) => {
+    setEditPatientForm({
+      firstName: p.firstName,
+      lastName: p.lastName,
+      birthDate: p.birthDate || '1985-06-15',
+      age: p.age,
+      gender: p.gender,
+      phone: p.phone || '',
+      address: p.address || '',
+      hospitalNumber: p.hospitalNumber || '',
+      profession: p.profession || '',
+      maritalStatus: p.maritalStatus || 'Non renseigné',
+      educationLevel: p.educationLevel || 'Non renseigné',
+      emergencyContact: p.emergencyContact || '',
+      emergencyPhone: p.emergencyPhone || '',
+      allergies: p.allergies || '',
+      chronicConditions: p.chronicConditions || ''
+    });
+    setEditPatientDpi(buildDpiFromPatient(p));
+    setShowEditPatientModal(true);
+  };
+
+  const handleSaveEditPatient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPatient) return;
+    const combinedChronic = [
+      ...editPatientDpi.medicalAntecedents,
+      ...(editPatientDpi.medicalAntecedentsOther ? [editPatientDpi.medicalAntecedentsOther] : [])
+    ].join(', ') || editPatientForm.chronicConditions;
+
+    const consumptions = extractConsumptionsFromDpi(editPatientDpi);
+    await updatePatient(selectedPatient.id, {
+      firstName: editPatientForm.firstName,
+      lastName: editPatientForm.lastName,
+      birthDate: editPatientForm.birthDate,
+      age: Number(editPatientForm.age || selectedPatient.age),
+      gender: editPatientForm.gender,
+      phone: editPatientForm.phone,
+      address: editPatientForm.address,
+      hospitalNumber: editPatientForm.hospitalNumber,
+      profession: editPatientForm.profession || editPatientDpi.occupationalProfile.currentProfession,
+      maritalStatus: editPatientForm.maritalStatus,
+      educationLevel: editPatientForm.educationLevel,
+      emergencyContact: editPatientForm.emergencyContact,
+      emergencyPhone: editPatientForm.emergencyPhone,
+      allergies: editPatientForm.allergies,
+      chronicConditions: combinedChronic,
+      medicalAntecedents: {
+        selected: editPatientDpi.medicalAntecedents,
+        other: editPatientDpi.medicalAntecedentsOther
+      },
+      smokingHistory: {
+        isSmoker: editPatientDpi.smokingStatus !== 'JAMAIS',
+        status: editPatientDpi.smokingStatus,
+        cigarettesPerDay: editPatientDpi.cigarettesPerDay,
+        durationYears: editPatientDpi.smokingDurationYears,
+        stoppedYear: editPatientDpi.smokingStoppedYear,
+        packYears: editPatientDpi.smokingPackYears,
+        periods: editPatientDpi.smokingPeriods,
+        biomassExposure: editPatientDpi.biomassExposure || editPatientDpi.occupationalProfile.exposures.includes('BIOMASSE'),
+        passiveSmoking: editPatientDpi.passiveSmoking
+      },
+      consumptions,
+      occupationalExposures: editPatientDpi.occupationalProfile,
+      surgicalHistory: editPatientDpi.surgicalHistory,
+      obgynHistory: editPatientDpi.obgynHistory
+    });
+    setShowEditPatientModal(false);
   };
 
   return (
@@ -245,7 +368,7 @@ export const Patients: React.FC = () => {
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 rounded-2xl bg-teal-600 text-white font-black text-base flex items-center justify-center shadow-xs">
-                    {selectedPatient.firstName[0]}{selectedPatient.lastName[0]}
+                    {selectedPatient.firstName?.[0] || 'P'}{selectedPatient.lastName?.[0] || ''}
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
@@ -306,39 +429,87 @@ export const Patients: React.FC = () => {
 
               {/* TAB 1: IDENTITÉ & FACTEURS DE RISQUE */}
               {activeTab === 'info' && (
-                <div className="space-y-5 text-xs">
+                <div className="space-y-4 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xxs font-extrabold text-slate-400 uppercase tracking-widest">
+                      Synthèse DPI — État Civil & Antécédents Structurés
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => openEditPatientModal(selectedPatient)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-teal-50 hover:bg-teal-100 text-teal-800 border border-teal-200 rounded-xl font-bold text-xxs transition cursor-pointer"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" />
+                      <span>Modifier État Civil & Antécédents DPI</span>
+                    </button>
+                  </div>
+
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-                      <span className="text-xxs font-bold text-slate-400 uppercase tracking-widest block">
-                        Coordonnées & État Civil
+                    <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
+                      <span className="text-xxs font-bold text-slate-400 uppercase tracking-widest block mb-1">
+                        1. État Civil & Coordonnées
                       </span>
-                      <p><strong>Téléphone :</strong> {selectedPatient.phone}</p>
-                      <p><strong>Adresse :</strong> {selectedPatient.address}</p>
+                      <p><strong>Nom & Prénom :</strong> {selectedPatient.lastName} {selectedPatient.firstName}</p>
+                      <p><strong>N° Dossier :</strong> <span className="font-mono">{selectedPatient.code}</span> • {selectedPatient.hospitalNumber || 'CHREIN'}</p>
+                      <p><strong>Âge / Sexe :</strong> {selectedPatient.age} ans ({selectedPatient.gender === 'F' ? 'Féminin' : 'Masculin'}) • Né(e) le {selectedPatient.birthDate}</p>
+                      <p><strong>Situation matrimoniale :</strong> {selectedPatient.maritalStatus || 'Non renseigné'}</p>
+                      <p><strong>Niveau d'études :</strong> {selectedPatient.educationLevel || 'Non renseigné'}</p>
                       <p><strong>Profession :</strong> {selectedPatient.profession || 'Non renseignée'}</p>
-                      <p><strong>Contact d'urgence :</strong> {selectedPatient.emergencyContact || 'Non renseigné'}</p>
-                      <p><strong>Date de naissance :</strong> {selectedPatient.birthDate}</p>
+                      <p><strong>Téléphone patient :</strong> {selectedPatient.phone}</p>
+                      <p><strong>Adresse :</strong> {selectedPatient.address}</p>
+                      <p><strong>Contact & Tél. d'urgence :</strong> {selectedPatient.emergencyContact || 'Non renseigné'} {selectedPatient.emergencyPhone ? `(${selectedPatient.emergencyPhone})` : ''}</p>
                     </div>
 
-                    <div className="p-3.5 bg-teal-50/50 rounded-xl border border-teal-200 space-y-2">
-                      <span className="text-xxs font-bold text-teal-900 uppercase tracking-widest block">
-                        Facteurs de Risque Respiratoires (Section 4)
+                    <div className="p-3.5 bg-teal-50/50 rounded-xl border border-teal-200 space-y-1.5">
+                      <span className="text-xxs font-bold text-teal-900 uppercase tracking-widest block mb-1">
+                        2. Antécédents & Consommations
                       </span>
                       <p>
                         <strong>Tabagisme : </strong>
-                        {selectedPatient.smokingHistory?.packYears ? `${selectedPatient.smokingHistory.packYears} Paquets-Années (PA)` : 'Non-fumeur'}
+                        {selectedPatient.smokingHistory?.status === 'ANCIEN'
+                          ? `Ancien fumeur (arrêt ${selectedPatient.smokingHistory.stoppedYear || 'N/A'}) — ${selectedPatient.smokingHistory.packYears || 0} PA`
+                          : selectedPatient.smokingHistory?.isSmoker || (selectedPatient.smokingHistory?.packYears || 0) > 0
+                            ? `Fumeur actuel — ${selectedPatient.smokingHistory?.packYears || 0} PA`
+                            : 'Jamais fumeur'}
                       </p>
                       <p>
-                        <strong>Exposition Biomasse : </strong>
-                        {selectedPatient.smokingHistory?.biomassExposure ? 'OUI (Cuisine feu de bois/charbon)' : 'NON'}
+                        <strong>Cannabis / Alcool / Drogues : </strong>
+                        Cannabis : {selectedPatient.consumptions?.cannabis?.status || 'JAMAIS'} • Alcool : {selectedPatient.consumptions?.alcohol?.status || 'JAMAIS'} • Autres : {selectedPatient.consumptions?.otherDrugs?.status || 'NON_RENSEIGNE'}
+                      </p>
+                      <p>
+                        <strong>Antécédents médicaux : </strong>
+                        {selectedPatient.medicalAntecedents?.selected?.length
+                          ? selectedPatient.medicalAntecedents.selected.join(', ')
+                          : (selectedPatient.chronicConditions || 'Aucun renseigné')}
                       </p>
                       <p>
                         <strong>Allergies / Terrain : </strong>
-                        {selectedPatient.allergies || 'Pas d\'allergie connue'}
+                        {selectedPatient.allergies || 'Aucune allergie connue'}
                       </p>
                       <p>
-                        <strong>Conditions Chroniques : </strong>
-                        <span className="font-semibold text-teal-950">{selectedPatient.chronicConditions || 'Aucune'}</span>
+                        <strong>Expositions pro/env. : </strong>
+                        {selectedPatient.occupationalExposures?.exposures?.length
+                          ? selectedPatient.occupationalExposures.exposures
+                              .map(id => OCCUPATIONAL_EXPOSURE_OPTIONS.find(o => o.id === id)?.label || id)
+                              .join(', ')
+                          : selectedPatient.smokingHistory?.biomassExposure
+                            ? 'Fumée de biomasse (bois, charbon)'
+                            : 'Aucune exposition signalée'}
                       </p>
+                      <p>
+                        <strong>ATCD chirurgicaux : </strong>
+                        {selectedPatient.surgicalHistory?.length
+                          ? selectedPatient.surgicalHistory.map(s => `${s.procedure} (${s.dateOrYear})`).join(' ; ')
+                          : 'Aucun'}
+                      </p>
+                      {selectedPatient.gender === 'F' && selectedPatient.obgynHistory && (
+                        <p>
+                          <strong>Gynéco-obstétrique : </strong>
+                          G{selectedPatient.obgynHistory.gestite ?? '-'} P{selectedPatient.obgynHistory.parite ?? '-'}
+                          {selectedPatient.obgynHistory.isPregnant ? ` • Grossesse en cours (${selectedPatient.obgynHistory.gestationalAgeWeeks || '?'} SA)` : ''}
+                          {selectedPatient.obgynHistory.menopause ? ' • Ménopausée' : ''}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -387,10 +558,10 @@ export const Patients: React.FC = () => {
                       <div key={h.id} className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="font-bold text-slate-900">
-                            Chambre {h.roomNumber} ({h.status === 'active' ? 'Séjour en cours' : 'Séjour clos'})
+                            Chambre {h.roomNumber || 'N/A'} ({h.status === 'active' ? 'Séjour en cours' : 'Séjour clos'})
                           </span>
                           <span className="text-xxs font-bold px-2 py-0.5 rounded bg-teal-100 text-teal-800">
-                            Entrée le {new Date(h.admissionDate).toLocaleDateString('fr-FR')}
+                            Entrée le {h.admissionDate ? new Date(h.admissionDate).toLocaleDateString('fr-FR') : '--'}
                           </span>
                         </div>
                         <p className="text-xxs text-slate-600"><strong>Motif d'admission :</strong> {h.reason}</p>
@@ -781,18 +952,45 @@ export const Patients: React.FC = () => {
                     <p className="text-xs text-slate-400 italic py-4">Aucune exploration médicale disponible.</p>
                   ) : (
                     patientExplorations.map(e => (
-                      <div key={e.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-slate-800">{e.title}</span>
-                          <span className="text-xxs text-emerald-700 font-bold">Validé conforme</span>
+                      <div key={e.id} className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <span className="font-bold text-slate-800">{e.title}</span>
+                            <span className="ml-2 text-xxs text-slate-500">
+                              Prescrit le {e.prescribedDate || e.date}
+                              {e.realizationDate ? ` • Réalisé le ${e.realizationDate}` : ''}
+                            </span>
+                          </div>
+                          <span
+                            className={`text-xxs font-bold px-2 py-0.5 rounded ${
+                              e.simpleStatus === 'REALISE' || e.validated
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : e.simpleStatus === 'EN_ATTENTE'
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-blue-100 text-blue-800'
+                            }`}
+                          >
+                            {e.simpleStatus === 'REALISE' || e.validated
+                              ? 'Réalisé / Validé'
+                              : e.simpleStatus === 'EN_ATTENTE'
+                                ? 'En attente'
+                                : 'Prescrit'}
+                          </span>
                         </div>
+                        {e.spirometryData && (
+                          <div className="flex flex-wrap gap-2 text-xxs bg-white p-2 rounded border border-teal-100 font-mono">
+                            <span>Pré-BD : VEMS {e.spirometryData.vemsPreL ?? '-'}L ({e.spirometryData.vemsPrePct ?? '-'}%) • CVF {e.spirometryData.cvfPreL ?? '-'}L • VEMS/CVF {e.spirometryData.tiffeneauPre ?? '-'}%</span>
+                            <span>| Post-BD : VEMS {e.spirometryData.vemsPostL ?? '-'}L ({e.spirometryData.vemsPostPct ?? '-'}%) • VEMS/CVF {e.spirometryData.tiffeneauPost ?? '-'}%</span>
+                          </div>
+                        )}
                         <div className="flex flex-wrap gap-2 pt-1 font-mono text-xxs">
-                          {e.extractedParameters.map((p, i) => (
+                          {(e.extractedParameters || []).map((p, i) => (
                             <span key={i} className="px-2 py-0.5 bg-white rounded border border-slate-200">
                               {p.parameter}: <strong>{p.value} {p.unit}</strong>
                             </span>
                           ))}
                         </div>
+                        {e.conclusion && <p className="text-xxs text-slate-600 italic">{e.conclusion}</p>}
                       </div>
                     ))
                   )}
@@ -867,31 +1065,31 @@ export const Patients: React.FC = () => {
         </div>
       </div>
 
-      {/* Modal: Nouveau Patient avec détection de doublons (Section 3) */}
+      {/* Modal: Nouveau Patient avec État civil complet et Antécédents DPI */}
       {showNewPatientModal && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-xl w-full p-6 space-y-5 shadow-2xl max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-4xl w-full p-6 space-y-5 shadow-2xl max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h3 className="text-base font-black text-slate-800">
-                Création d'un Nouveau Dossier Patient
+                Création d'un Nouveau Dossier Patient (DPI Complet)
               </h3>
               <button
+                type="button"
                 onClick={() => setShowNewPatientModal(false)}
-                className="text-slate-400 hover:text-slate-600 font-bold"
+                className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer"
               >
                 ✕
               </button>
             </div>
 
-            {/* DUPLICATE WARNING BANNER (Section 3) */}
             {potentialDuplicates.length > 0 && (
               <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl space-y-2 text-xs text-amber-900">
                 <div className="flex items-center gap-2 font-black text-amber-800">
                   <AlertTriangle className="w-4 h-4 text-amber-600" />
-                  <span>Doublon potentiel détecté (Cahier des charges — Section 3)</span>
+                  <span>Doublon potentiel détecté (Section 3)</span>
                 </div>
                 <p className="text-xxs text-amber-800">
-                  Le système a identifié {potentialDuplicates.length} dossier(s) existant(s) avec des coordonnées similaires. La fusion automatique est strictement proscrite.
+                  Le système a identifié {potentialDuplicates.length} dossier(s) existant(s) similaire(s).
                 </p>
                 <div className="space-y-1 font-mono text-xxs bg-white/70 p-2 rounded border border-amber-200">
                   {potentialDuplicates.map(d => (
@@ -904,117 +1102,158 @@ export const Patients: React.FC = () => {
               </div>
             )}
 
-            <form onSubmit={handleCreatePatient} className="space-y-4 text-xs">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Prénom *</label>
-                  <input
-                    type="text"
-                    required
-                    value={newPatientForm.firstName}
-                    onChange={(e) => setNewPatientForm({ ...newPatientForm, firstName: e.target.value })}
-                    className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Nom *</label>
-                  <input
-                    type="text"
-                    required
-                    value={newPatientForm.lastName}
-                    onChange={(e) => setNewPatientForm({ ...newPatientForm, lastName: e.target.value })}
-                    className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">N° Hospitalier CHREIN</label>
-                  <input
-                    type="text"
-                    value={newPatientForm.hospitalNumber}
-                    onChange={(e) => setNewPatientForm({ ...newPatientForm, hospitalNumber: e.target.value })}
-                    className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Âge</label>
-                  <input
-                    type="number"
-                    value={newPatientForm.age}
-                    onChange={(e) => setNewPatientForm({ ...newPatientForm, age: Number(e.target.value) })}
-                    className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Sexe</label>
-                  <select
-                    value={newPatientForm.gender}
-                    onChange={(e) => setNewPatientForm({ ...newPatientForm, gender: e.target.value as any })}
-                    className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2"
-                  >
-                    <option value="M">Masculin</option>
-                    <option value="F">Féminin</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Téléphone *</label>
-                  <input
-                    type="text"
-                    required
-                    value={newPatientForm.phone}
-                    onChange={(e) => setNewPatientForm({ ...newPatientForm, phone: e.target.value })}
-                    className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Quartier / Adresse (Kaolack)</label>
-                  <input
-                    type="text"
-                    value={newPatientForm.address}
-                    onChange={(e) => setNewPatientForm({ ...newPatientForm, address: e.target.value })}
-                    className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Tabagisme (Paquets-Années)</label>
-                  <input
-                    type="number"
-                    value={newPatientForm.smokingPackYears}
-                    onChange={(e) => setNewPatientForm({ ...newPatientForm, smokingPackYears: Number(e.target.value) })}
-                    className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2"
-                  />
-                </div>
-                <div className="flex items-center pt-5">
-                  <label className="flex items-center gap-2 cursor-pointer">
+            <form onSubmit={handleCreatePatient} className="space-y-5 text-xs">
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                <h4 className="font-black text-slate-800 uppercase tracking-wide text-xxs">1. État Civil & Identification</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Prénom *</label>
                     <input
-                      type="checkbox"
-                      checked={newPatientForm.biomassExposure}
-                      onChange={(e) => setNewPatientForm({ ...newPatientForm, biomassExposure: e.target.checked })}
-                      className="h-4 w-4 text-teal-600 rounded"
+                      type="text"
+                      required
+                      value={newPatientForm.firstName}
+                      onChange={(e) => setNewPatientForm({ ...newPatientForm, firstName: e.target.value })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
                     />
-                    <span className="font-bold text-slate-700">Exposition feux de bois / biomasse</span>
-                  </label>
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Nom *</label>
+                    <input
+                      type="text"
+                      required
+                      value={newPatientForm.lastName}
+                      onChange={(e) => setNewPatientForm({ ...newPatientForm, lastName: e.target.value })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">N° Dossier CHREIN</label>
+                    <input
+                      type="text"
+                      value={newPatientForm.hospitalNumber}
+                      onChange={(e) => setNewPatientForm({ ...newPatientForm, hospitalNumber: e.target.value })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Date de naissance</label>
+                    <input
+                      type="date"
+                      value={newPatientForm.birthDate}
+                      onChange={(e) => setNewPatientForm({ ...newPatientForm, birthDate: e.target.value })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Âge</label>
+                    <input
+                      type="number"
+                      value={newPatientForm.age}
+                      onChange={(e) => setNewPatientForm({ ...newPatientForm, age: Number(e.target.value) })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Sexe</label>
+                    <select
+                      value={newPatientForm.gender}
+                      onChange={(e) => setNewPatientForm({ ...newPatientForm, gender: e.target.value as 'M' | 'F' })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    >
+                      <option value="M">Masculin</option>
+                      <option value="F">Féminin</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Téléphone *</label>
+                    <input
+                      type="text"
+                      required
+                      value={newPatientForm.phone}
+                      onChange={(e) => setNewPatientForm({ ...newPatientForm, phone: e.target.value })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Adresse / Quartier</label>
+                    <input
+                      type="text"
+                      value={newPatientForm.address}
+                      onChange={(e) => setNewPatientForm({ ...newPatientForm, address: e.target.value })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Profession</label>
+                    <input
+                      type="text"
+                      value={newPatientForm.profession}
+                      onChange={(e) => setNewPatientForm({ ...newPatientForm, profession: e.target.value })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Tél. à contacter en urgence</label>
+                    <input
+                      type="text"
+                      value={newPatientForm.emergencyPhone}
+                      onChange={(e) => setNewPatientForm({ ...newPatientForm, emergencyPhone: e.target.value })}
+                      placeholder="+221 77..."
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">A. Situation matrimoniale</label>
+                    <select
+                      value={newPatientForm.maritalStatus}
+                      onChange={(e) => setNewPatientForm({ ...newPatientForm, maritalStatus: e.target.value as MaritalStatus })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    >
+                      {MARITAL_STATUS_OPTIONS.map(opt => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">B. Niveau d'études</label>
+                    <select
+                      value={newPatientForm.educationLevel}
+                      onChange={(e) => setNewPatientForm({ ...newPatientForm, educationLevel: e.target.value as EducationLevel })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    >
+                      {EDUCATION_LEVEL_OPTIONS.map(opt => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Nom personne d'urgence / Allergies</label>
+                    <input
+                      type="text"
+                      value={newPatientForm.emergencyContact}
+                      onChange={(e) => setNewPatientForm({ ...newPatientForm, emergencyContact: e.target.value })}
+                      placeholder="Nom du proche / tuteur"
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    />
+                  </div>
                 </div>
               </div>
 
-              <div>
-                <label className="font-bold text-slate-700 block mb-1">Pathologie Principale / Antécédents respiratoires</label>
-                <input
-                  type="text"
-                  placeholder="ex: Tuberculose TPM+, BPCO, Asthme, PID..."
-                  value={newPatientForm.chronicConditions}
-                  onChange={(e) => setNewPatientForm({ ...newPatientForm, chronicConditions: e.target.value })}
-                  className="w-full text-xs bg-slate-50 border border-slate-200 rounded-xl p-2.5"
-                />
-              </div>
+              <PatientDpiHistoryEditor
+                value={newPatientDpi}
+                onChange={setNewPatientDpi}
+                gender={newPatientForm.gender}
+                compact
+              />
 
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
                 <button
@@ -1029,6 +1268,193 @@ export const Patients: React.FC = () => {
                   className="px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold shadow-xs transition cursor-pointer"
                 >
                   Créer le dossier IP
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Éditer État Civil & Antécédents DPI */}
+      {showEditPatientModal && selectedPatient && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-4xl w-full p-6 space-y-5 shadow-2xl max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="text-base font-black text-slate-800">
+                Édition DPI — {selectedPatient.firstName} {selectedPatient.lastName} ({selectedPatient.code})
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowEditPatientModal(false)}
+                className="text-slate-400 hover:text-slate-600 font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditPatient} className="space-y-5 text-xs">
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+                <h4 className="font-black text-slate-800 uppercase tracking-wide text-xxs">1. État Civil & Identification</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Prénom *</label>
+                    <input
+                      type="text"
+                      required
+                      value={editPatientForm.firstName}
+                      onChange={(e) => setEditPatientForm({ ...editPatientForm, firstName: e.target.value })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Nom *</label>
+                    <input
+                      type="text"
+                      required
+                      value={editPatientForm.lastName}
+                      onChange={(e) => setEditPatientForm({ ...editPatientForm, lastName: e.target.value })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">N° Dossier CHREIN</label>
+                    <input
+                      type="text"
+                      value={editPatientForm.hospitalNumber}
+                      onChange={(e) => setEditPatientForm({ ...editPatientForm, hospitalNumber: e.target.value })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Âge</label>
+                    <input
+                      type="number"
+                      value={editPatientForm.age}
+                      onChange={(e) => setEditPatientForm({ ...editPatientForm, age: Number(e.target.value) })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Sexe</label>
+                    <select
+                      value={editPatientForm.gender}
+                      onChange={(e) => setEditPatientForm({ ...editPatientForm, gender: e.target.value as 'M' | 'F' })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    >
+                      <option value="M">Masculin</option>
+                      <option value="F">Féminin</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Téléphone</label>
+                    <input
+                      type="text"
+                      value={editPatientForm.phone}
+                      onChange={(e) => setEditPatientForm({ ...editPatientForm, phone: e.target.value })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2 font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Tél. urgence</label>
+                    <input
+                      type="text"
+                      value={editPatientForm.emergencyPhone}
+                      onChange={(e) => setEditPatientForm({ ...editPatientForm, emergencyPhone: e.target.value })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2 font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Adresse</label>
+                    <input
+                      type="text"
+                      value={editPatientForm.address}
+                      onChange={(e) => setEditPatientForm({ ...editPatientForm, address: e.target.value })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Profession</label>
+                    <input
+                      type="text"
+                      value={editPatientForm.profession}
+                      onChange={(e) => setEditPatientForm({ ...editPatientForm, profession: e.target.value })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">A. Situation matrimoniale</label>
+                    <select
+                      value={editPatientForm.maritalStatus}
+                      onChange={(e) => setEditPatientForm({ ...editPatientForm, maritalStatus: e.target.value as MaritalStatus })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    >
+                      {MARITAL_STATUS_OPTIONS.map(opt => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">B. Niveau d'études</label>
+                    <select
+                      value={editPatientForm.educationLevel}
+                      onChange={(e) => setEditPatientForm({ ...editPatientForm, educationLevel: e.target.value as EducationLevel })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    >
+                      {EDUCATION_LEVEL_OPTIONS.map(opt => (
+                        <option key={opt} value={opt}>{opt}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Personne à contacter en urgence</label>
+                    <input
+                      type="text"
+                      value={editPatientForm.emergencyContact}
+                      onChange={(e) => setEditPatientForm({ ...editPatientForm, emergencyContact: e.target.value })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-bold text-slate-700 block mb-1">Allergies connues</label>
+                    <input
+                      type="text"
+                      value={editPatientForm.allergies}
+                      onChange={(e) => setEditPatientForm({ ...editPatientForm, allergies: e.target.value })}
+                      className="w-full text-xs bg-white border border-slate-200 rounded-xl p-2"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <PatientDpiHistoryEditor
+                value={editPatientDpi}
+                onChange={setEditPatientDpi}
+                gender={editPatientForm.gender}
+                compact
+              />
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowEditPatientModal(false)}
+                  className="px-4 py-2 border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 font-medium cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold shadow-xs transition cursor-pointer"
+                >
+                  Enregistrer les modifications DPI
                 </button>
               </div>
             </form>

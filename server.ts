@@ -25,15 +25,12 @@ async function startServer() {
   // Compression middleware to drastically reduce API transfer payload sizes (e.g. 1MB json -> ~100KB)
   app.use(compression());
 
-  // Browser HTTP cache acceleration for static assets and pre-bundled dependencies
+  // Browser HTTP cache acceleration ONLY for hashed production assets (never in Vite dev mode)
   app.use((req, res, next) => {
-    if (
-      req.url.includes('/node_modules/.vite/') ||
-      req.url.includes('/@fs/') ||
-      req.url.includes('/assets/') ||
-      req.url.match(/\.(js|css|woff2|woff|ttf|svg|png|jpg|jpeg|webp|ico)(\?.*)?$/)
-    ) {
+    if (process.env.NODE_ENV === 'production' && req.url.startsWith('/assets/')) {
       res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    } else if (process.env.NODE_ENV !== 'production' && req.url.includes('/node_modules/.vite/')) {
+      res.setHeader('Cache-Control', 'no-cache');
     }
     next();
   });

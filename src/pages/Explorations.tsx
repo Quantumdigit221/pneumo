@@ -9,8 +9,10 @@ import {
   StructuredImagingReport,
   ExplorationAuditEntry,
   ExplorationResultVersion,
+  SpirometryStructuredData,
   Role
 } from '../types';
+import { PARACLINICAL_CATALOG, MacroExplorationCategoryId } from '../utils/dpiConstants';
 import {
   FileText,
   Upload,
@@ -155,19 +157,32 @@ export const Explorations: React.FC = () => {
 
   // New Exploration Form State
   const [newPatientId, setNewPatientId] = useState<string>(patients[0]?.id || '');
+  const [newMacroCategory, setNewMacroCategory] = useState<MacroExplorationCategoryId>('BIOLOGIE');
+  const [newSubCategory, setNewSubCategory] = useState<string>('Hématologie');
   const [newCategory, setNewCategory] = useState<ExplorationCategory>('HEMATOLOGIE');
-  const [newExamTitle, setNewExamTitle] = useState('Hémogramme Complet (NFS + Plaquettes)');
-  const [newExamType, setNewExamType] = useState('Numération Formule Sanguine');
+  const [newExamTitle, setNewExamTitle] = useState('NFS (Numération Formule Sanguine)');
+  const [newExamType, setNewExamType] = useState('Biologie médicale');
   const [newIndication, setNewIndication] = useState('Bilan systématique d\'évaluation respiratoire.');
   const [newPriority, setNewPriority] = useState<ExplorationPriority>('NORMALE');
-  const [newLabDestination, setNewLabDestination] = useState('Laboratoire Central d\'Hématologie CHREIN');
-  const [newSpecimenType, setNewSpecimenType] = useState('Sang veineux EDTA (Tube mauve)');
+  const [newLabDestination, setNewLabDestination] = useState('Laboratoire Central CHREIN');
+  const [newSpecimenType, setNewSpecimenType] = useState('Sang veineux EDTA');
+  const [newPrescribedDate, setNewPrescribedDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [newRealizationDate, setNewRealizationDate] = useState('');
+  const [newSimpleStatus, setNewSimpleStatus] = useState<'PRESCRIT' | 'EN_ATTENTE' | 'REALISE'>('PRESCRIT');
 
-  // Results Entry Form State (Structured + Narrative)
+  // Results Entry Form State (Structured + Narrative + Spirometry + Attachment + Follow-ups)
   const [entryParameters, setEntryParameters] = useState<ExplorationExtractedItem[]>([]);
   const [entryNarrative, setEntryNarrative] = useState('');
   const [entryConclusion, setEntryConclusion] = useState('');
   const [entrySpecimenDate, setEntrySpecimenDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [entryRealizationDate, setEntryRealizationDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [entrySimpleStatus, setEntrySimpleStatus] = useState<'PRESCRIT' | 'EN_ATTENTE' | 'REALISE'>('REALISE');
+  const [entrySourceType, setEntrySourceType] = useState<'PHOTO' | 'PDF' | 'DICOM' | 'SAISIE_DIRECTE'>('SAISIE_DIRECTE');
+  const [entryAttachmentName, setEntryAttachmentName] = useState('');
+  const [entryFileUrl, setEntryFileUrl] = useState('');
+  const [entrySpiro, setEntrySpiro] = useState<SpirometryStructuredData>({});
+  const [entryFollowUpSummary, setEntryFollowUpSummary] = useState('');
+  const [entryFollowUps, setEntryFollowUps] = useState<Array<{ id: string; date: string; summary: string }>>([]);
 
   // OCR Side-by-side Verification State
   const [ocrConfidence, setOcrConfidence] = useState(94);
@@ -305,6 +320,14 @@ export const Explorations: React.FC = () => {
     }
     setEntryNarrative(exp.narrativeReport || '');
     setEntryConclusion(exp.conclusion || '');
+    setEntryRealizationDate(exp.realizationDate || new Date().toISOString().split('T')[0]);
+    setEntrySimpleStatus(exp.simpleStatus || (exp.validated ? 'REALISE' : 'EN_ATTENTE'));
+    setEntrySourceType(exp.sourceType || 'SAISIE_DIRECTE');
+    setEntryAttachmentName(exp.attachmentName || '');
+    setEntryFileUrl(exp.fileUrl || '');
+    setEntrySpiro(exp.spirometryData || {});
+    setEntryFollowUps(exp.followUpResults || []);
+    setEntryFollowUpSummary('');
     setActiveView('SAISIE_RESULTATS');
   };
 
@@ -345,11 +368,43 @@ export const Explorations: React.FC = () => {
       notes: isSubmitForValidation ? 'Résultat saisi et soumis pour validation médicale' : 'Résultat sauvegardé en brouillon'
     };
 
+    const finalSpiro: SpirometryStructuredData | undefined =
+      activeExploration.category.includes('EFR') ||
+      activeExploration.macroCategory === 'EFR' ||
+      activeExploration.title.toLowerCase().includes('spirom')
+        ? {
+            ...entrySpiro,
+            tiffeneauPre:
+              entrySpiro.vemsPreL && entrySpiro.cvfPreL
+                ? Number(((entrySpiro.vemsPreL / entrySpiro.cvfPreL) * 100).toFixed(1))
+                : entrySpiro.tiffeneauPre,
+            tiffeneauPost:
+              entrySpiro.vemsPostL && entrySpiro.cvfPostL
+                ? Number(((entrySpiro.vemsPostL / entrySpiro.cvfPostL) * 100).toFixed(1))
+                : entrySpiro.tiffeneauPost,
+            gainMl:
+              entrySpiro.vemsPostL && entrySpiro.vemsPreL
+                ? Math.round((entrySpiro.vemsPostL - entrySpiro.vemsPreL) * 1000)
+                : entrySpiro.gainMl,
+            gainPct:
+              entrySpiro.vemsPostL && entrySpiro.vemsPreL && entrySpiro.vemsPreL > 0
+                ? Number((((entrySpiro.vemsPostL - entrySpiro.vemsPreL) / entrySpiro.vemsPreL) * 100).toFixed(1))
+                : entrySpiro.gainPct
+          }
+        : activeExploration.spirometryData;
+
     const updated: MedicalExploration = {
       ...activeExploration,
       extractedParameters: evaluatedParams,
       narrativeReport: entryNarrative,
       conclusion: entryConclusion,
+      realizationDate: entryRealizationDate || new Date().toISOString().split('T')[0],
+      simpleStatus: isSubmitForValidation ? 'REALISE' : entrySimpleStatus,
+      sourceType: entrySourceType,
+      attachmentName: entryAttachmentName || undefined,
+      fileUrl: entryFileUrl || undefined,
+      spirometryData: finalSpiro,
+      followUpResults: entryFollowUps,
       hasAbnormalFlag: hasAbnormal,
       hasCriticalFlag: hasCritical,
       status: targetStatus,
@@ -377,12 +432,17 @@ export const Explorations: React.FC = () => {
       patientGender: pat.gender,
       centerId: currentCenter?.id || 'center-1',
       category: newCategory,
+      macroCategory: newMacroCategory,
+      subCategory: newSubCategory,
       title: newExamTitle,
       examType: newExamType,
       clinicalIndication: newIndication,
       priority: newPriority,
-      status: 'REQUESTED',
-      date: new Date().toISOString().split('T')[0],
+      status: newSimpleStatus === 'REALISE' ? 'RESULT_ENTERED' : newSimpleStatus === 'EN_ATTENTE' ? 'IN_PROGRESS' : 'REQUESTED',
+      simpleStatus: newSimpleStatus,
+      date: newPrescribedDate || new Date().toISOString().split('T')[0],
+      prescribedDate: newPrescribedDate || new Date().toISOString().split('T')[0],
+      realizationDate: newRealizationDate || undefined,
       requestedAt: new Date().toISOString(),
       prescribedById: currentUser?.id || 'u1',
       prescribedByName: currentUser?.name || 'Dr. Cheikh Ndao',
@@ -399,7 +459,7 @@ export const Explorations: React.FC = () => {
           userId: currentUser?.id || 'u1',
           userName: currentUser?.name || 'Dr. Cheikh Ndao',
           userRole: 'CLINICIAN',
-          notes: `Prescription médicale émise (${newPriority})`
+          notes: `Prescription médicale émise (${newPriority} - Statut ${newSimpleStatus})`
         }
       ],
       createdAt: new Date().toISOString(),
@@ -689,14 +749,19 @@ export const Explorations: React.FC = () => {
                   onChange={(e) => setFilterCategory(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2 text-xs font-semibold text-slate-700 cursor-pointer"
                 >
-                  <option value="ALL">Toutes Catégories</option>
-                  <option value="MICROBIOLOGIE">Microbiologie (GeneXpert BK)</option>
-                  <option value="IMAGERIE">Imagerie (Radio / TDM)</option>
-                  <option value="GAZOMETRIE">Gazométrie Artérielle</option>
-                  <option value="EFR">EFR / Spirométrie</option>
-                  <option value="HEMATOLOGIE">Hématologie (NFS)</option>
-                  <option value="BIOCHIMIE">Biochimie (Iono / Foie)</option>
-                  <option value="INFLAMMATION">Inflammation (CRP)</option>
+                  <option value="ALL">Toutes Catégories (A–F)</option>
+                  <option value="HEMATOLOGIE">A. Biologie — Hématologie</option>
+                  <option value="BIOCHIMIE">A. Biologie — Biochimie</option>
+                  <option value="GAZOMETRIE">A. Biologie — Gaz du sang / Autres</option>
+                  <option value="INFLAMMATION">A. Biologie — Inflammation (CRP/VS)</option>
+                  <option value="MICROBIOLOGIE">B. Microbiologie — Bactériologie</option>
+                  <option value="MYCOBACTERIOLOGIE">B. Microbiologie — Mycobactériologie (BAAR / GeneXpert)</option>
+                  <option value="VIROLOGIE">B. Microbiologie — Virologie</option>
+                  <option value="MYCOLOGIE">B. Microbiologie — Mycologie & Parasitologie</option>
+                  <option value="IMAGERIE">C. Imagerie Médicale (Radio / TDM / IRM / Écho)</option>
+                  <option value="CARDIOVASCULAIRE">D. Explorations Cardiovasculaires (ECG / ETT / Holter)</option>
+                  <option value="EFR">E. Explorations Fonctionnelles Respiratoires (Spirométrie / DLCO / TM6)</option>
+                  <option value="AUTRES">F. Autres Explorations</option>
                 </select>
               </div>
 
@@ -710,10 +775,10 @@ export const Explorations: React.FC = () => {
                   <option value="ALL">Tous les Statuts</option>
                   <option value="REQUESTED">Prescrit (REQUESTED)</option>
                   <option value="SPECIMEN_COLLECTED">Prélevé (SPECIMEN_COLLECTED)</option>
-                  <option value="IN_PROGRESS">En analyse (IN_PROGRESS)</option>
-                  <option value="RESULT_ENTERED">Résultat saisi (RESULT_ENTERED)</option>
-                  <option value="SUBMITTED">À valider (SUBMITTED)</option>
-                  <option value="VALIDATED">Validé médicalement (VALIDATED)</option>
+                  <option value="IN_PROGRESS">En attente / Analyse (IN_PROGRESS)</option>
+                  <option value="RESULT_ENTERED">Réalisé — Résultat saisi (RESULT_ENTERED)</option>
+                  <option value="SUBMITTED">Réalisé — À valider (SUBMITTED)</option>
+                  <option value="VALIDATED">Réalisé — Validé médicalement (VALIDATED)</option>
                   <option value="AMENDED">Amendé V2+ (AMENDED)</option>
                 </select>
               </div>
@@ -782,10 +847,12 @@ export const Explorations: React.FC = () => {
 
                       {/* Date */}
                       <td className="p-3.5 text-slate-600 font-medium">
-                        <div>{exp.date}</div>
-                        <div className="text-3xs text-slate-400 font-mono">
-                          {exp.requestedAt ? new Date(exp.requestedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '08:30'}
-                        </div>
+                        <div>Prescrit : {exp.prescribedDate || exp.date}</div>
+                        {exp.realizationDate && (
+                          <div className="text-3xs text-emerald-700 font-bold">
+                            Réalisé : {exp.realizationDate}
+                          </div>
+                        )}
                       </td>
 
                       {/* Patient */}
@@ -798,8 +865,13 @@ export const Explorations: React.FC = () => {
                       <td className="p-3.5">
                         <div className="font-bold text-slate-800">{exp.title}</div>
                         <span className="text-[10px] font-mono font-semibold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200">
-                          {exp.category}
+                          {exp.subCategory || exp.category}
                         </span>
+                        {exp.attachmentName && (
+                          <span className="ml-1.5 text-[10px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200">
+                            {exp.sourceType}: {exp.attachmentName}
+                          </span>
+                        )}
                       </td>
 
                       {/* Prescriber */}
@@ -822,21 +894,27 @@ export const Explorations: React.FC = () => {
 
                       {/* Status Machine Badge */}
                       <td className="p-3.5">
-                        <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md border flex items-center gap-1 w-fit ${
-                          exp.status === 'VALIDATED'
-                            ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                            : exp.status === 'SUBMITTED'
-                            ? 'bg-amber-50 text-amber-900 border-amber-300 animate-pulse'
-                            : exp.status === 'AMENDED'
-                            ? 'bg-blue-50 text-blue-900 border-blue-300'
-                            : exp.status === 'REQUESTED'
-                            ? 'bg-slate-100 text-slate-700 border-slate-300'
-                            : 'bg-teal-50 text-teal-800 border-teal-300'
-                        }`}>
-                          {exp.status === 'VALIDATED' && <Check className="w-3 h-3 text-emerald-600" />}
-                          {exp.status === 'SUBMITTED' && <Clock className="w-3 h-3 text-amber-600" />}
-                          <span>{exp.status}</span>
-                        </span>
+                        <div className="flex flex-col gap-1">
+                          <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md border flex items-center gap-1 w-fit ${
+                            exp.status === 'VALIDATED' || exp.simpleStatus === 'REALISE'
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                              : exp.status === 'SUBMITTED' || exp.simpleStatus === 'EN_ATTENTE'
+                              ? 'bg-amber-50 text-amber-900 border-amber-300'
+                              : 'bg-blue-50 text-blue-800 border-blue-200'
+                          }`}>
+                            {exp.status === 'VALIDATED' && <Check className="w-3 h-3 text-emerald-600" />}
+                            <span>
+                              {exp.status === 'VALIDATED'
+                                ? 'Réalisé (Validé)'
+                                : exp.simpleStatus === 'REALISE' || exp.status === 'RESULT_ENTERED' || exp.status === 'SUBMITTED'
+                                ? 'Réalisé'
+                                : exp.simpleStatus === 'EN_ATTENTE' || exp.status === 'IN_PROGRESS' || exp.status === 'SPECIMEN_COLLECTED'
+                                ? 'En attente'
+                                : 'Prescrit'}
+                            </span>
+                          </span>
+                          <span className="text-[9px] font-mono text-slate-400">{exp.status}</span>
+                        </div>
                         {exp.hasCriticalFlag && (
                           <span className="text-[9px] font-black text-rose-600 flex items-center gap-0.5 mt-0.5">
                             <AlertCircle className="w-3 h-3" /> Valeur critique !
@@ -970,63 +1048,78 @@ export const Explorations: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-              {/* Category */}
-              <div>
-                <label className="text-xxs font-bold text-slate-700 block mb-1 uppercase tracking-wider">
-                  Catégorie d'Exploration *
-                </label>
-                <select
-                  value={newCategory}
-                  onChange={(e) => {
-                    const cat = e.target.value as ExplorationCategory;
-                    setNewCategory(cat);
-                    // Autofill title and destination
-                    if (cat === 'MICROBIOLOGIE') {
-                      setNewExamTitle('GeneXpert MTB/RIF — Crachats matinaux');
-                      setNewExamType('Biologie moléculaire (PCR temps réel)');
-                      setNewLabDestination('Unité PNT / Laboratoire de Bactériologie CHREIN');
-                      setNewSpecimenType('Crachats purulents matinaux');
-                    } else if (cat === 'GAZOMETRIE') {
-                      setNewExamTitle('Gazométrie Artérielle en Air Ambiant');
-                      setNewExamType('Gaz du sang radial');
-                      setNewLabDestination('Laboratoire des Urgences CHREIN');
-                      setNewSpecimenType('Sang artériel hépariné');
-                    } else if (cat === 'EFR_RESPIRATOIRE') {
-                      setNewExamTitle('Spirométrie avec Test de Réversibilité');
-                      setNewExamType('Exploration Fonctionnelle Respiratoire');
-                      setNewLabDestination('Unité EFR Pneumologie CHREIN');
-                      setNewSpecimenType('Non applicable');
-                    } else if (cat === 'IMAGERIE') {
-                      setNewExamTitle('Radiographie Thoracique Face & Profil');
-                      setNewExamType('Imagerie conventionnelle');
-                      setNewLabDestination('Service de Radiologie CHREIN');
-                      setNewSpecimenType('Non applicable');
-                    } else if (cat === 'INFLAMMATION') {
-                      setNewExamTitle('Protéine C-Réactive (CRP Quantitative)');
-                      setNewExamType('Immunoturbidimétrie');
-                      setNewLabDestination('Laboratoire Central CHREIN');
-                      setNewSpecimenType('Sérum');
-                    }
-                  }}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-800 cursor-pointer"
-                >
-                  <option value="MICROBIOLOGIE">Microbiologie (GeneXpert BK / Cultures)</option>
-                  <option value="GAZOMETRIE">Gazométrie Artérielle</option>
-                  <option value="EFR_RESPIRATOIRE">EFR / Spirométrie Fonctionnelle</option>
-                  <option value="IMAGERIE">Imagerie Thoracique (Radio / TDM / Écho)</option>
-                  <option value="HEMATOLOGIE">Hématologie (NFS / Hémogramme)</option>
-                  <option value="BIOCHIMIE">Biochimie (Iono / Foie / Rein)</option>
-                  <option value="INFLAMMATION">Inflammation (CRP / VS)</option>
-                  <option value="IMMUNOLOGIE">Immunologie & Sérologies</option>
-                  <option value="ANAPATH">Anatomopathologie (Biopsies)</option>
-                </select>
+            {/* Catégories structurées A-F */}
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3 text-xs">
+              <span className="text-xxs font-black uppercase text-slate-600 tracking-wider block">
+                Sélection Rapide par Catégorie (A – F) *
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {PARACLINICAL_CATALOG.map(cat => (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => {
+                      setNewMacroCategory(cat.id);
+                      const firstSub = cat.subCategories[0];
+                      setNewSubCategory(firstSub.label);
+                      setNewCategory(firstSub.explorationCategory);
+                      setNewExamTitle(firstSub.exams[0]);
+                      setNewLabDestination(cat.defaultLab);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg font-bold transition cursor-pointer ${
+                      newMacroCategory === cat.id
+                        ? 'bg-teal-600 text-white shadow-xs'
+                        : 'bg-white border border-slate-200 text-slate-700 hover:bg-teal-50'
+                    }`}
+                  >
+                    {cat.letter}. {cat.label}
+                  </button>
+                ))}
               </div>
 
-              {/* Exam Title */}
-              <div>
+              {/* Subcategories & Quick Exam Chips */}
+              {(() => {
+                const activeCat = PARACLINICAL_CATALOG.find(c => c.id === newMacroCategory) || PARACLINICAL_CATALOG[0];
+                return (
+                  <div className="space-y-2.5 pt-1">
+                    {activeCat.subCategories.map(sub => (
+                      <div key={sub.id} className="bg-white p-3 rounded-xl border border-slate-200 space-y-2">
+                        <span className="text-xxs font-extrabold text-teal-900 uppercase tracking-wide block">
+                          {sub.label}
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {sub.exams.map(exam => (
+                            <button
+                              key={exam}
+                              type="button"
+                              onClick={() => {
+                                setNewSubCategory(sub.label);
+                                setNewCategory(sub.explorationCategory);
+                                setNewExamTitle(exam);
+                                setNewExamType(sub.label);
+                                setNewLabDestination(activeCat.defaultLab);
+                              }}
+                              className={`px-2.5 py-1 rounded-md text-xxs font-semibold transition cursor-pointer ${
+                                newExamTitle === exam
+                                  ? 'bg-teal-600 text-white font-bold'
+                                  : 'bg-slate-100 text-slate-700 hover:bg-teal-50 hover:text-teal-800'
+                              }`}
+                            >
+                              {exam}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 text-xs">
+              <div className="md:col-span-2">
                 <label className="text-xxs font-bold text-slate-700 block mb-1 uppercase tracking-wider">
-                  Intitulé Précis de l'Examen *
+                  Intitulé Précis de l'Examen (libre ou sélectionné) *
                 </label>
                 <input
                   type="text"
@@ -1036,10 +1129,48 @@ export const Explorations: React.FC = () => {
                   required
                 />
               </div>
+
+              <div>
+                <label className="text-xxs font-bold text-slate-700 block mb-1 uppercase tracking-wider">
+                  Statut
+                </label>
+                <select
+                  value={newSimpleStatus}
+                  onChange={(e) => setNewSimpleStatus(e.target.value as any)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-bold text-slate-800"
+                >
+                  <option value="PRESCRIT">Prescrit</option>
+                  <option value="EN_ATTENTE">En attente</option>
+                  <option value="REALISE">Réalisé</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xxs font-bold text-slate-700 block mb-1 uppercase tracking-wider">
+                  Date de prescription *
+                </label>
+                <input
+                  type="date"
+                  value={newPrescribedDate}
+                  onChange={(e) => setNewPrescribedDate(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono"
+                  required
+                />
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-              {/* Destination Laboratory */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+              <div>
+                <label className="text-xxs font-bold text-slate-700 block mb-1 uppercase tracking-wider">
+                  Date de réalisation (si effectué)
+                </label>
+                <input
+                  type="date"
+                  value={newRealizationDate}
+                  onChange={(e) => setNewRealizationDate(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 font-mono"
+                />
+              </div>
               <div>
                 <label className="text-xxs font-bold text-slate-700 block mb-1 uppercase tracking-wider">
                   Laboratoire ou Service Destinataire
@@ -1051,8 +1182,6 @@ export const Explorations: React.FC = () => {
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-800"
                 />
               </div>
-
-              {/* Specimen Type */}
               <div>
                 <label className="text-xxs font-bold text-slate-700 block mb-1 uppercase tracking-wider">
                   Type de Prélèvement / Échantillon
@@ -1419,6 +1548,108 @@ export const Explorations: React.FC = () => {
             </div>
           </div>
 
+          {/* Dates, Statut et Pièce jointe (Photo / PDF / DICOM) */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs bg-slate-50 p-4 rounded-xl border border-slate-200">
+            <div>
+              <label className="text-xxs font-bold text-slate-700 block mb-1">Date de réalisation</label>
+              <input
+                type="date"
+                value={entryRealizationDate}
+                onChange={(e) => setEntryRealizationDate(e.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-2 font-mono"
+              />
+            </div>
+            <div>
+              <label className="text-xxs font-bold text-slate-700 block mb-1">Statut clinique</label>
+              <select
+                value={entrySimpleStatus}
+                onChange={(e) => setEntrySimpleStatus(e.target.value as any)}
+                className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-2 font-bold"
+              >
+                <option value="PRESCRIT">Prescrit</option>
+                <option value="EN_ATTENTE">En attente</option>
+                <option value="REALISE">Réalisé</option>
+              </select>
+            </div>
+            <div className="md:col-span-2">
+              <label className="text-xxs font-bold text-slate-700 block mb-1">
+                Joindre un fichier (Photo, PDF ou DICOM)
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="file"
+                  accept="image/*,.pdf,.dcm,application/dicom"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (!f) return;
+                    setEntryAttachmentName(f.name);
+                    const ext = f.name.toLowerCase();
+                    if (ext.endsWith('.dcm')) setEntrySourceType('DICOM');
+                    else if (ext.endsWith('.pdf')) setEntrySourceType('PDF');
+                    else setEntrySourceType('PHOTO');
+                    const reader = new FileReader();
+                    reader.onload = () => setEntryFileUrl(String(reader.result || ''));
+                    reader.readAsDataURL(f);
+                  }}
+                  className="text-xxs bg-white border border-slate-200 rounded-lg p-1.5 flex-1"
+                />
+                {entryAttachmentName && (
+                  <span className="px-2 py-1 bg-indigo-50 border border-indigo-200 text-indigo-800 rounded text-3xs font-bold truncate max-w-[140px]">
+                    {entryAttachmentName}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Spirométrie structurée pré/post-BD si EFR */}
+          {(activeExploration.category.includes('EFR') ||
+            activeExploration.macroCategory === 'EFR' ||
+            activeExploration.title.toLowerCase().includes('spirom')) && (
+            <div className="p-4 bg-teal-50/50 rounded-xl border border-teal-200 space-y-3 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-black text-teal-950 uppercase tracking-wide text-xxs">
+                  Spirométrie Structurée — Pré & Post-Bronchodilatateurs
+                </span>
+                <span className="text-xxs font-mono text-teal-800 font-bold">
+                  {entrySpiro.vemsPreL && entrySpiro.cvfPreL
+                    ? `VEMS/CVF Pré: ${((entrySpiro.vemsPreL / entrySpiro.cvfPreL) * 100).toFixed(1)}%`
+                    : ''}
+                  {entrySpiro.vemsPostL && entrySpiro.vemsPreL
+                    ? ` • Gain BD: ${Math.round((entrySpiro.vemsPostL - entrySpiro.vemsPreL) * 1000)} mL (${(((entrySpiro.vemsPostL - entrySpiro.vemsPreL) / entrySpiro.vemsPreL) * 100).toFixed(1)}%)`
+                    : ''}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-2.5">
+                <div>
+                  <label className="text-3xs font-bold text-slate-600 block mb-0.5">VEMS Pré (L)</label>
+                  <input type="number" step="0.01" value={entrySpiro.vemsPreL ?? ''} onChange={(e) => setEntrySpiro({ ...entrySpiro, vemsPreL: e.target.value === '' ? undefined : Number(e.target.value) })} className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 font-mono" />
+                </div>
+                <div>
+                  <label className="text-3xs font-bold text-slate-600 block mb-0.5">VEMS Pré (%)</label>
+                  <input type="number" step="0.1" value={entrySpiro.vemsPrePct ?? ''} onChange={(e) => setEntrySpiro({ ...entrySpiro, vemsPrePct: e.target.value === '' ? undefined : Number(e.target.value) })} className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 font-mono" />
+                </div>
+                <div>
+                  <label className="text-3xs font-bold text-slate-600 block mb-0.5">CVF Pré (L)</label>
+                  <input type="number" step="0.01" value={entrySpiro.cvfPreL ?? ''} onChange={(e) => setEntrySpiro({ ...entrySpiro, cvfPreL: e.target.value === '' ? undefined : Number(e.target.value) })} className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 font-mono" />
+                </div>
+                <div>
+                  <label className="text-3xs font-bold text-slate-600 block mb-0.5">VEMS Post (L)</label>
+                  <input type="number" step="0.01" value={entrySpiro.vemsPostL ?? ''} onChange={(e) => setEntrySpiro({ ...entrySpiro, vemsPostL: e.target.value === '' ? undefined : Number(e.target.value) })} className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 font-mono" />
+                </div>
+                <div>
+                  <label className="text-3xs font-bold text-slate-600 block mb-0.5">VEMS Post (%)</label>
+                  <input type="number" step="0.1" value={entrySpiro.vemsPostPct ?? ''} onChange={(e) => setEntrySpiro({ ...entrySpiro, vemsPostPct: e.target.value === '' ? undefined : Number(e.target.value) })} className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 font-mono" />
+                </div>
+                <div>
+                  <label className="text-3xs font-bold text-slate-600 block mb-0.5">CVF Post (L)</label>
+                  <input type="number" step="0.01" value={entrySpiro.cvfPostL ?? ''} onChange={(e) => setEntrySpiro({ ...entrySpiro, cvfPostL: e.target.value === '' ? undefined : Number(e.target.value) })} className="w-full bg-white border border-slate-200 rounded-lg px-2 py-1.5 font-mono" />
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Narrative Compte Rendu & Conclusion */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
             <div>
@@ -1464,6 +1695,52 @@ export const Explorations: React.FC = () => {
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 font-bold text-xs text-slate-900 focus:outline-teal-600"
               />
             </div>
+          </div>
+
+          {/* Résultats successifs / Suivi longitudinal sur le même examen */}
+          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5 text-xs">
+            <span className="text-xxs font-black uppercase text-slate-600 tracking-wider block">
+              Enregistrement de Résultats Successifs (Contrôles itératifs)
+            </span>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={entryFollowUpSummary}
+                onChange={(e) => setEntryFollowUpSummary(e.target.value)}
+                placeholder="Ex: Contrôle J7 : CRP descendue à 18 mg/L, normalisation leucocytaire..."
+                className="flex-1 bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (!entryFollowUpSummary.trim()) return;
+                  setEntryFollowUps(prev => [
+                    ...prev,
+                    { id: `fu-${Date.now()}`, date: entryRealizationDate || new Date().toISOString().split('T')[0], summary: entryFollowUpSummary.trim() }
+                  ]);
+                  setEntryFollowUpSummary('');
+                }}
+                className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-bold text-xxs cursor-pointer"
+              >
+                + Ajouter suivi
+              </button>
+            </div>
+            {entryFollowUps.length > 0 && (
+              <div className="space-y-1 pt-1">
+                {entryFollowUps.map(fu => (
+                  <div key={fu.id} className="flex items-center justify-between bg-white px-3 py-1.5 rounded-lg border border-slate-200">
+                    <span><strong className="font-mono text-teal-800">{fu.date}</strong> — {fu.summary}</span>
+                    <button
+                      type="button"
+                      onClick={() => setEntryFollowUps(prev => prev.filter(x => x.id !== fu.id))}
+                      className="text-rose-500 hover:text-rose-700 text-xxs font-bold cursor-pointer"
+                    >
+                      Supprimer
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Submission Controls */}
@@ -1745,6 +2022,46 @@ export const Explorations: React.FC = () => {
               </div>
             ) : (
               <p className="text-xs text-slate-400 italic">Aucun paramètre saisi pour le moment.</p>
+            )}
+
+            {activeExploration.spirometryData && (
+              <div className="p-3 bg-teal-50/40 rounded-xl border border-teal-200 text-xs space-y-1">
+                <strong className="text-xxs font-extrabold uppercase text-teal-900 block">
+                  Paramètres Spirométriques (Pré & Post-Bronchodilatateurs) :
+                </strong>
+                <div className="flex flex-wrap gap-3 font-mono text-xxs">
+                  <span>Pré-BD : VEMS {activeExploration.spirometryData.vemsPreL ?? '-'} L ({activeExploration.spirometryData.vemsPrePct ?? '-'}%) • CVF {activeExploration.spirometryData.cvfPreL ?? '-'} L • VEMS/CVF {activeExploration.spirometryData.tiffeneauPre ?? '-'}%</span>
+                  <span>Post-BD : VEMS {activeExploration.spirometryData.vemsPostL ?? '-'} L ({activeExploration.spirometryData.vemsPostPct ?? '-'}%) • CVF {activeExploration.spirometryData.cvfPostL ?? '-'} L • VEMS/CVF {activeExploration.spirometryData.tiffeneauPost ?? '-'}%</span>
+                  {activeExploration.spirometryData.gainMl !== undefined && (
+                    <span className="font-bold text-teal-800">Gain : +{activeExploration.spirometryData.gainMl} mL ({activeExploration.spirometryData.gainPct ?? '-'}%)</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeExploration.attachmentName && (
+              <div className="p-3 bg-indigo-50/50 rounded-xl border border-indigo-200 text-xs flex items-center justify-between">
+                <div>
+                  <strong className="text-indigo-900">Pièce jointe ({activeExploration.sourceType}) :</strong>{' '}
+                  <span className="font-mono">{activeExploration.attachmentName}</span>
+                </div>
+                {activeExploration.fileUrl && activeExploration.sourceType === 'PHOTO' && (
+                  <img src={activeExploration.fileUrl} alt={activeExploration.attachmentName} className="h-14 rounded border border-indigo-200" />
+                )}
+              </div>
+            )}
+
+            {activeExploration.followUpResults && activeExploration.followUpResults.length > 0 && (
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1.5">
+                <strong className="text-xxs font-extrabold uppercase text-slate-600 block">
+                  Résultats Successifs / Contrôles :
+                </strong>
+                {activeExploration.followUpResults.map(fu => (
+                  <div key={fu.id} className="bg-white p-2 rounded border border-slate-200">
+                    <strong className="font-mono text-teal-800">{fu.date}</strong> — {fu.summary}
+                  </div>
+                ))}
+              </div>
             )}
 
             {activeExploration.conclusion && (

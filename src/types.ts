@@ -65,6 +65,97 @@ export interface User {
 // -------------------------------------------------------------
 // PATIENT ET IDENTITE MULTISTRUCTURE (Section 3 du Cahier des Charges)
 // -------------------------------------------------------------
+export type MaritalStatus =
+  | 'Célibataire'
+  | 'Marié(e) monogame'
+  | 'Marié(e) polygame'
+  | 'Divorcé(e)'
+  | 'Veuf / Veuve'
+  | 'Autre'
+  | 'Non renseigné';
+
+export type EducationLevel =
+  | 'Non scolarisé'
+  | 'Primaire'
+  | 'Secondaire'
+  | 'Supérieur'
+  | 'École coranique'
+  | 'Autre'
+  | 'Non renseigné';
+
+export type SmokingStatus = 'JAMAIS' | 'ACTUEL' | 'ANCIEN';
+export type ConsumptionStatus = 'JAMAIS' | 'ACTUEL' | 'ANCIEN';
+
+export interface SmokingPeriod {
+  id: string;
+  label?: string;
+  cigarettesPerDay: number;
+  durationYears: number;
+  startYear?: string;
+  stopYear?: string;
+  packYears: number;
+}
+
+export interface PatientConsumptions {
+  smoking?: {
+    status: SmokingStatus;
+    cigarettesPerDay?: number;
+    durationYears?: number;
+    stoppedYear?: string;
+    packYears?: number;
+    periods?: SmokingPeriod[];
+    biomassExposure?: boolean;
+    passiveSmoking?: boolean;
+  };
+  cannabis?: {
+    status: ConsumptionStatus;
+    frequency?: string;
+    duration?: string;
+  };
+  alcohol?: {
+    status: ConsumptionStatus;
+    frequency?: string;
+    quantity?: string;
+  };
+  otherDrugs?: {
+    status: 'OUI' | 'NON' | 'NON_RENSEIGNE';
+    substance?: string;
+    frequency?: string;
+    duration?: string;
+    route?: string;
+  };
+}
+
+export interface OccupationalExposureProfile {
+  currentProfession?: string;
+  previousProfessions?: string;
+  exposures: string[];
+  otherExposures?: string;
+  durationYears?: number;
+  exposureConditions?: string;
+}
+
+export interface SurgicalHistoryEntry {
+  id: string;
+  procedure: string;
+  dateOrYear: string;
+  complications?: string;
+}
+
+export interface ObgynHistory {
+  gestite?: number;
+  parite?: number;
+  miscarriagesOrAbortions?: number;
+  lastMenstrualPeriod?: string;
+  isPregnant?: boolean;
+  gestationalAgeWeeks?: number;
+  menopause?: boolean;
+  menopauseAge?: number;
+  contraception?: string;
+  obstetricComplications?: string;
+  otherGynHistory?: string;
+}
+
 export interface Patient {
   id: string;
   centerId: string; // Cloisonnement multistructure
@@ -80,18 +171,33 @@ export interface Patient {
   district?: string; // Quartier (ex: Ndangane, Médina Baye, Kasnack, Sara...)
   region?: string; // Kaolack, Fatick, Kaffrine, etc.
   profession?: string;
+  maritalStatus?: MaritalStatus;
+  educationLevel?: EducationLevel;
   emergencyContact?: string;
   emergencyPhone?: string;
   bloodGroup?: 'A+' | 'A-' | 'B+' | 'B-' | 'AB+' | 'AB-' | 'O+' | 'O-';
   allergies?: string;
   chronicConditions?: string; // Séquelles TB, BPCO, Diabète, HTA, Asthme, VIH
+  medicalAntecedents?: {
+    selected: string[];
+    other?: string;
+    notes?: string;
+  };
   smokingHistory?: {
     isSmoker: boolean;
+    status?: SmokingStatus;
+    cigarettesPerDay?: number;
+    durationYears?: number;
     packYears?: number; // Paquets-années (PA)
     stoppedYear?: string;
+    periods?: SmokingPeriod[];
     biomassExposure?: boolean; // Exposition feux de bois / biomasse cuisine
     passiveSmoking?: boolean;
   };
+  consumptions?: PatientConsumptions;
+  occupationalExposures?: OccupationalExposureProfile;
+  surgicalHistory?: SurgicalHistoryEntry[];
+  obgynHistory?: ObgynHistory;
   notes?: string;
   createdAt: string;
   updatedAt?: string;
@@ -126,19 +232,110 @@ export interface ClinicalDiagnosis {
 // -------------------------------------------------------------
 // CONSULTATION STANDARDISÉE EN 12 ÉTAPES (Section 4 du Cahier des Charges)
 // -------------------------------------------------------------
+export interface SpirometryStructuredData {
+  cvfPreL?: number;
+  cvfPrePct?: number;
+  vemsPreL?: number;
+  vemsPrePct?: number;
+  tiffeneauPre?: number;
+  cvfPostL?: number;
+  cvfPostPct?: number;
+  vemsPostL?: number;
+  vemsPostPct?: number;
+  tiffeneauPost?: number;
+  gainMl?: number;
+  gainPct?: number;
+}
+
+export interface OrderedParaclinicalExam {
+  id: string;
+  macroCategory: 'BIOLOGIE' | 'MICROBIOLOGIE' | 'IMAGERIE' | 'CARDIOVASCULAIRE' | 'EFR' | 'AUTRES';
+  subCategory?: string;
+  examName: string;
+  status: 'PRESCRIT' | 'EN_ATTENTE' | 'REALISE';
+  prescribedDate: string;
+  realizedDate?: string;
+  resultsText?: string;
+  followUpEntries?: Array<{
+    id: string;
+    date: string;
+    summary: string;
+  }>;
+  attachmentName?: string;
+  attachmentType?: 'PHOTO' | 'PDF' | 'DICOM';
+  attachmentUrl?: string;
+  spirometryData?: SpirometryStructuredData;
+  linkedExplorationId?: string;
+}
+
+export interface VitalsSeriesEntry {
+  id: string;
+  timestamp: string;
+  bp?: string;
+  pulse?: number;
+  rr?: number;
+  spo2Mode?: 'AIR_AMBIANT' | 'SOUS_O2';
+  spo2Ambient?: number;
+  spo2O2?: number;
+  o2FlowLiters?: number;
+  o2Device?: string;
+  fio2?: number;
+  temperature?: number;
+  weight?: number;
+  height?: number;
+  bmi?: number;
+  generalState?: 'BON' | 'ALTERE_LEGER' | 'ALTERE_SEVERE' | 'CACHECTION';
+  notes?: string;
+}
+
+export interface SyndromicPriorityItem {
+  id: string;
+  text: string;
+  severity?: 'CRITIQUE' | 'MAJEUR' | 'MODERE';
+}
+
 export interface ConsultationTwelveSteps {
   // 1) État civil et identification (lié au patient)
   civilStatusNotes?: string;
+  maritalStatus?: MaritalStatus;
+  educationLevel?: EducationLevel;
+  profession?: string;
+  emergencyPhone?: string;
   
   // 2) Motif de consultation
   chiefComplaint: string;
   
-  // 3) Histoire de la maladie
+  // 3) Histoire de la maladie (+ échelle mMRC déplacée ici)
   historyOfIllness: string;
+  mmrcGrade?: number;
   
   // 4) Antécédents et facteurs de risque
   riskFactors: {
     smokingPA?: number;
+    smokingStatus?: SmokingStatus;
+    cigarettesPerDay?: number;
+    smokingDurationYears?: number;
+    smokingStoppedYear?: string;
+    smokingPeriods?: SmokingPeriod[];
+    cannabis?: {
+      status: ConsumptionStatus;
+      frequency?: string;
+      duration?: string;
+    };
+    alcohol?: {
+      status: ConsumptionStatus;
+      frequency?: string;
+      quantity?: string;
+    };
+    otherDrugs?: {
+      status: 'OUI' | 'NON' | 'NON_RENSEIGNE';
+      substance?: string;
+      frequency?: string;
+      duration?: string;
+      route?: string;
+    };
+    medicalAntecedents?: string[];
+    medicalAntecedentsOther?: string;
     biomassExposure?: boolean;
     tbContact?: boolean;
     allergiesAtopy?: string;
@@ -146,6 +343,9 @@ export interface ConsultationTwelveSteps {
     hivStatus?: 'POSITIF' | 'NEGATIF' | 'INCONNU';
     diabetesHta?: string;
     occupationalExposure?: string; // Poussières de ciment, arachide, solvants...
+    occupationalProfile?: OccupationalExposureProfile;
+    surgicalHistory?: SurgicalHistoryEntry[];
+    obgynHistory?: ObgynHistory;
   };
   antecedentsText?: string;
   
@@ -154,9 +354,12 @@ export interface ConsultationTwelveSteps {
     bp?: string; // Ex: 120/80 mmHg
     pulse?: number; // bpm
     rr?: number; // Fréquence respiratoire /min
+    spo2Mode?: 'AIR_AMBIANT' | 'SOUS_O2';
     spo2Ambient?: number; // % en air ambiant
     spo2O2?: number; // % sous oxygène
     o2FlowLiters?: number; // L/min
+    o2Device?: string; // Lunettes nasales, Masque simple, MHC...
+    fio2?: number; // % FiO2 si disponible
     temperature?: number; // °C
     weight?: number; // kg
     height?: number; // cm
@@ -165,6 +368,7 @@ export interface ConsultationTwelveSteps {
     painEva?: number; // 0 à 10
     generalState?: 'BON' | 'ALTERE_LEGER' | 'ALTERE_SEVERE' | 'CACHECTION';
   };
+  vitalsSeries?: VitalsSeriesEntry[];
   
   // 6) Appareils et systèmes (avec parenthèses () sans signes préimprimés)
   systems: {
@@ -183,6 +387,9 @@ export interface ConsultationTwelveSteps {
   
   // 7) Résumé syndromique
   syndromicSummary: string; // Ex: Syndrome de condensation pulmonaire fébrile, syndrome bronchique obstructif
+  syndromicIntro?: string;
+  syndromicSelectedAntecedents?: string[];
+  syndromicItems?: SyndromicPriorityItem[];
   
   // 8) Hypothèses diagnostiques
   diagnosticHypotheses: string[];
@@ -197,6 +404,7 @@ export interface ConsultationTwelveSteps {
     geneXpertBK?: boolean;
     pleuralPuncture?: boolean;
     otherNotes?: string;
+    orderedExamsDetailed?: OrderedParaclinicalExam[];
   };
   
   // 10) Diagnostics retenus (multiples avec CIM-11, type et statut)
@@ -336,6 +544,7 @@ export interface ClinicalScoreCalculation {
     | 'BODE'
     | 'DECAF'
     | 'ACT'
+    | 'ACQ'
     | 'GINA'
     | 'TB_SCORE'
     | 'RALPH_SCORE'
@@ -548,10 +757,14 @@ export type ExplorationCategory =
   | 'BIOCHIMIE'
   | 'INFLAMMATION'
   | 'MICROBIOLOGIE'
+  | 'MYCOBACTERIOLOGIE'
+  | 'VIROLOGIE'
+  | 'MYCOLOGIE_PARASITOLOGIE'
   | 'IMMUNOLOGIE'
   | 'GAZOMETRIE'
   | 'ANAPATH'
   | 'EFR_RESPIRATOIRE'
+  | 'CARDIOVASCULAIRE'
   | 'IMAGERIE'
   | 'AUTRES'
   // Compatibilité historique
@@ -625,12 +838,17 @@ export interface MedicalExploration {
   consultationId?: string;
   episodeId?: string;
   category: ExplorationCategory;
+  macroCategory?: 'BIOLOGIE' | 'MICROBIOLOGIE' | 'IMAGERIE' | 'CARDIOVASCULAIRE' | 'EFR' | 'AUTRES';
+  subCategory?: string;
   title: string;
   examType?: string;
   clinicalIndication: string;
   priority: ExplorationPriority;
   status: ExplorationStatus;
+  simpleStatus?: 'PRESCRIT' | 'EN_ATTENTE' | 'REALISE';
   date: string;
+  prescribedDate?: string;
+  realizationDate?: string;
   requestedAt: string;
   prescribedById: string;
   prescribedByName: string;
@@ -642,10 +860,21 @@ export interface MedicalExploration {
   specimenCollectedBy?: string;
   
   // Résultats
-  sourceType: 'PHOTO' | 'PDF' | 'SAISIE_DIRECTE';
+  sourceType: 'PHOTO' | 'PDF' | 'DICOM' | 'SAISIE_DIRECTE';
   fileUrl?: string;
+  attachmentName?: string;
   rawText?: string;
   extractedParameters: ExplorationExtractedItem[];
+  spirometryData?: SpirometryStructuredData;
+  followUpResults?: Array<{
+    id: string;
+    date: string;
+    summary: string;
+    parameters?: ExplorationExtractedItem[];
+    conclusion?: string;
+    attachmentName?: string;
+    fileUrl?: string;
+  }>;
   structuredImagingReport?: StructuredImagingReport;
   narrativeReport?: string;
   conclusion?: string;

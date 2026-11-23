@@ -462,12 +462,12 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
               <>
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-full bg-teal-600 text-white font-bold text-xs flex items-center justify-center shadow-xs shrink-0">
-                    {currentUser.name.toUpperCase().substring(0, 2)}
+                    {(currentUser.name || currentUser.email || 'CH').toUpperCase().substring(0, 2)}
                   </div>
                   <div className="flex-1 overflow-hidden">
-                    <p className="text-xs font-bold text-slate-800 truncate">{currentUser.name}</p>
+                    <p className="text-xs font-bold text-slate-800 truncate">{currentUser.name || currentUser.email || 'Praticien'}</p>
                     <p className="text-3xs text-teal-700 font-semibold truncate">
-                      {currentUser.specialty || currentUser.role}
+                      {currentUser.specialty || currentUser.role || 'Praticien'}
                     </p>
                   </div>
                 </div>
@@ -483,9 +483,9 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
               <>
                 <div
                   className="w-8 h-8 rounded-full bg-teal-600 text-white font-bold text-xs flex items-center justify-center shadow-xs cursor-pointer"
-                  title={`${currentUser.name} (${currentUser.specialty || currentUser.role})`}
+                  title={`${currentUser.name || 'Praticien'} (${currentUser.specialty || currentUser.role || ''})`}
                 >
-                  {currentUser.name.toUpperCase().substring(0, 2)}
+                  {(currentUser.name || currentUser.email || 'CH').toUpperCase().substring(0, 2)}
                 </div>
                 <button
                   onClick={logout}
@@ -608,14 +608,14 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
             {/* Connected User Pill */}
             <div className="flex items-center gap-2 pl-2 border-l border-slate-200">
               <div className="w-7 h-7 rounded-full bg-teal-600 text-white font-extrabold text-xxs flex items-center justify-center shadow-xs">
-                {currentUser.name.substring(0, 2).toUpperCase()}
+                {(currentUser.name || currentUser.email || 'CH').substring(0, 2).toUpperCase()}
               </div>
               <div className="hidden sm:block text-left">
                 <span className="text-xs font-bold text-slate-800 block leading-tight">
-                  {currentUser.name}
+                  {currentUser.name || currentUser.email || 'Praticien'}
                 </span>
                 <span className="text-3xs text-slate-400 font-medium block">
-                  {currentUser.role}
+                  {currentUser.role || 'Praticien'}
                 </span>
               </div>
             </div>

@@ -57,7 +57,7 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   let userEmail: string | undefined;
   let userId: string | undefined;
   try {
-    const saved = localStorage.getItem('current_user');
+    const saved = typeof window !== 'undefined' && window.localStorage ? window.localStorage.getItem('current_user') : null;
     if (saved) {
       const u = JSON.parse(saved);
       userEmail = u?.email;
@@ -1429,24 +1429,51 @@ interface AppContextType extends AppState {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+function safeStorageGet(key: string): string | null {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return null;
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeStorageSet(key: string, value: string): void {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Storage unavailable or quota exceeded
+  }
+}
+
+function safeStorageRemove(key: string): void {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return;
+    window.localStorage.removeItem(key);
+  } catch {
+    // Storage unavailable
+  }
+}
+
 function loadInitialState<T>(tableName: string, fallback: T[]): T[] {
   try {
-    const saved = localStorage.getItem(`offline_${tableName}`);
+    const saved = safeStorageGet(`offline_${tableName}`);
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed) && parsed.length > 0) {
+        const cleanParsed = parsed.filter((x: any) => x && typeof x === 'object');
+        if (cleanParsed.length === 0) return fallback;
         if (tableName === 'hospitalizations' || tableName === 'beds' || tableName === 'specialized_pneumo') {
-          const existingIds = new Set(parsed.map((x: any) => x.id));
-          const missingFallback = (fallback as any[]).filter(x => !existingIds.has(x.id));
+          const existingIds = new Set(cleanParsed.map((x: any) => x.id));
+          const missingFallback = (fallback as any[]).filter(x => x && !existingIds.has(x.id));
           if (missingFallback.length > 0) {
-            const merged = [...parsed, ...missingFallback];
-            try {
-              localStorage.setItem(`offline_${tableName}`, JSON.stringify(merged));
-            } catch (_) {}
+            const merged = [...cleanParsed, ...missingFallback];
+            safeStorageSet(`offline_${tableName}`, JSON.stringify(merged));
             return merged;
           }
         }
-        return parsed;
+        return cleanParsed;
       }
     }
   } catch {}
@@ -1461,7 +1488,7 @@ function saveToLocalCache(tableName: string, data: any[]) {
   }
   const timer = setTimeout(() => {
     try {
-      localStorage.setItem(`offline_${tableName}`, JSON.stringify(data));
+      safeStorageSet(`offline_${tableName}`, JSON.stringify(data));
     } catch (e) {
       console.warn(`[Local cache] Notice sauvegarde ${tableName}:`, e);
     }
@@ -1472,17 +1499,37 @@ function saveToLocalCache(tableName: string, data: any[]) {
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('current_user');
+    const saved = safeStorageGet('current_user');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) { return null; }
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.id) {
+          return {
+            ...parsed,
+            name: typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name : (parsed.email || 'Praticien'),
+            role: parsed.role || Role.DOCTOR
+          } as User;
+        }
+        safeStorageRemove('current_user');
+      } catch {
+        safeStorageRemove('current_user');
+      }
     }
     return null;
   });
 
   const [currentCenter, setCurrentCenter] = useState<HealthCenter | null>(() => {
-    const saved = localStorage.getItem('current_center');
+    const saved = safeStorageGet('current_center');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) { return null; }
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.id) {
+          return parsed as HealthCenter;
+        }
+        safeStorageRemove('current_center');
+      } catch {
+        safeStorageRemove('current_center');
+      }
     }
     return null;
   });
@@ -1514,34 +1561,45 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [medicalDocuments, setMedicalDocuments] = useState<MedicalDocumentRecord[]>(() => loadInitialState('medical_documents', MOCK_MEDICAL_DOCUMENTS));
 
   const [officinePartners, setOfficinePartners] = useState<OfficinePartner[]>(() => {
-    const saved = localStorage.getItem('oclic_officine_partners');
+    const saved = safeStorageGet('oclic_officine_partners');
     if (saved) {
-      try { return JSON.parse(saved); } catch {}
+      try {
+        const parsed = JSON.parse(saved);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {}
     }
     return [];
   });
 
   const [officineOrders, setOfficineOrders] = useState<OfficinePrescriptionOrder[]>(() => {
-    const saved = localStorage.getItem('oclic_officine_orders');
+    const saved = safeStorageGet('oclic_officine_orders');
     if (saved) {
-      try { return JSON.parse(saved); } catch {}
+      try {
+        const parsed = JSON.parse(saved);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {}
     }
     return [];
   });
 
   const [clinicProspects, setClinicProspects] = useState<ClinicProspect[]>(() => {
-    const saved = localStorage.getItem('oclic_clinic_prospects');
+    const saved = safeStorageGet('oclic_clinic_prospects');
     if (saved) {
-      try { return JSON.parse(saved); } catch {}
+      try {
+        const parsed = JSON.parse(saved);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {}
     }
     return [];
   });
 
   const deduplicate = <T extends { id: string }>(next: T[] | ((prev: T[]) => T[]), prev: T[]): T[] => {
     const list = typeof next === 'function' ? next(prev) : next;
+    if (!Array.isArray(list)) return prev;
     const seen = new Set<string>();
     return list.filter(item => {
-      if (!item || !item.id) return true;
+      if (!item || typeof item !== 'object') return false;
+      if (!item.id) return true;
       if (seen.has(item.id)) return false;
       seen.add(item.id);
       return true;
@@ -1551,18 +1609,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const setAllCenters = (val: HealthCenter[] | ((prev: HealthCenter[]) => HealthCenter[])) => setAllCentersRaw(prev => deduplicate(val, prev));
   const setUsers = (val: User[] | ((prev: User[]) => User[])) => setUsersRaw(prev => {
     const list = typeof val === 'function' ? val(prev) : val;
-    const mergedList = [...list];
+    const mergedList = Array.isArray(list) ? list.filter(u => u && typeof u === 'object') : [];
     MOCK_USERS.forEach(mockU => {
-      const exists = mergedList.some(u => u.email.toLowerCase() === mockU.email.toLowerCase());
+      const exists = mergedList.some(u => (u.email || '').toLowerCase() === mockU.email.toLowerCase());
       if (!exists) {
         mergedList.push(mockU);
       }
     });
     const dedupedList = deduplicate(mergedList, prev);
     return dedupedList.map(u => {
-      const fallbackUser = MOCK_USERS.find(mu => mu.email.toLowerCase() === u.email.toLowerCase());
+      const fallbackUser = MOCK_USERS.find(mu => mu.email.toLowerCase() === (u.email || '').toLowerCase());
       return {
         ...u,
+        name: u.name || fallbackUser?.name || u.email || 'Praticien',
         password: u.password || fallbackUser?.password || 'password'
       };
     });
@@ -1618,7 +1677,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const [useHostinger, setUseHostingerState] = useState<boolean>(() => {
-    localStorage.setItem('use_hostinger', 'true');
+    safeStorageSet('use_hostinger', 'true');
     return true;
   });
 
@@ -1633,7 +1692,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   });
 
   const setUseHostinger = (val: boolean) => {
-    localStorage.setItem('use_hostinger', 'true');
+    safeStorageSet('use_hostinger', 'true');
     setUseHostingerState(true);
   };
 
@@ -1665,7 +1724,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       setIsLoading(true);
     }
     try {
-      const isSeedingDisabled = localStorage.getItem('disable_database_seeding') === 'true';
+      const isSeedingDisabled = safeStorageGet('disable_database_seeding') === 'true';
 
       const tables = [
         { name: 'centers', setter: setAllCenters, mock: MOCK_CENTERS },
@@ -1908,14 +1967,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   useEffect(() => {
     if (currentUser) {
       const { password: _, ...safeUser } = currentUser;
-      localStorage.setItem('current_user', JSON.stringify(safeUser));
+      safeStorageSet('current_user', JSON.stringify(safeUser));
     } else {
-      localStorage.removeItem('current_user');
+      safeStorageRemove('current_user');
     }
     if (currentCenter) {
-      localStorage.setItem('current_center', JSON.stringify(currentCenter));
+      safeStorageSet('current_center', JSON.stringify(currentCenter));
     } else {
-      localStorage.removeItem('current_center');
+      safeStorageRemove('current_center');
     }
   }, [currentUser, currentCenter]);
 
@@ -1967,8 +2026,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const logout = () => {
-    localStorage.removeItem('current_user');
-    localStorage.removeItem('current_center');
+    safeStorageRemove('current_user');
+    safeStorageRemove('current_center');
     setCurrentUser(null);
     setCurrentCenter(null);
   };
@@ -2217,7 +2276,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           const json = await res.json();
           if (json.success && Array.isArray(json.data)) {
             setTickets(json.data);
-            try { localStorage.setItem('offline_tickets', JSON.stringify(json.data)); } catch {}
+            safeStorageSet('offline_tickets', JSON.stringify(json.data));
           }
         }
       } catch (e) {
@@ -2414,9 +2473,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       });
 
       setServices(updatedServices);
-      try {
-        localStorage.setItem('offline_services', JSON.stringify(updatedServices));
-      } catch (_) {}
+      safeStorageSet('offline_services', JSON.stringify(updatedServices));
 
       if (useHostinger) {
         const modifiedItems = updatedServices.filter(s => {
@@ -2560,7 +2617,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     try {
       const p = patients.find(pat => pat.id === id);
       if (p) {
-        const ageVal = data.birthDate ? new Date().getFullYear() - new Date(data.birthDate).getFullYear() : p.age;
+        const ageVal = data.age !== undefined ? data.age : (data.birthDate ? new Date().getFullYear() - new Date(data.birthDate).getFullYear() : p.age);
         const updated = { ...data, age: ageVal };
         setPatients(prev => prev.map(pat => pat.id === id ? { ...pat, ...updated } : pat));
         await dbUpdate('patients', id, updated);
@@ -2612,7 +2669,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           };
           setOfficineOrders(prev => {
             const updated = [newOfficineOrder, ...prev];
-            localStorage.setItem('oclic_officine_orders', JSON.stringify(updated));
+            safeStorageSet('oclic_officine_orders', JSON.stringify(updated));
             return updated;
           });
         }
@@ -2919,7 +2976,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }) => {
     setIsLoading(true);
     try {
-      localStorage.setItem('disable_database_seeding', 'true');
+      safeStorageSet('disable_database_seeding', 'true');
 
       const tablesToPurge: string[] = [];
       if (options.purgePatients) {
@@ -2956,7 +3013,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         await loadHostingerData();
       } else {
         for (const tableName of tablesToPurge) {
-          localStorage.removeItem(`offline_${tableName}`);
+          safeStorageRemove(`offline_${tableName}`);
         }
       }
 
@@ -2984,7 +3041,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const resetDatabaseSeeding = () => {
-    localStorage.removeItem('disable_database_seeding');
+    safeStorageRemove('disable_database_seeding');
     if (useHostinger) {
       loadHostingerData();
     } else {
@@ -2999,7 +3056,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } as OfficinePartner;
     setOfficinePartners(prev => {
       const updated = [newPartner, ...prev];
-      localStorage.setItem('oclic_officine_partners', JSON.stringify(updated));
+      safeStorageSet('oclic_officine_partners', JSON.stringify(updated));
       return updated;
     });
     return newPartner;
@@ -3008,7 +3065,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const updateOfficinePartner = async (id: string, data: Partial<OfficinePartner>): Promise<void> => {
     setOfficinePartners(prev => {
       const updated = prev.map(p => p.id === id ? { ...p, ...data } : p);
-      localStorage.setItem('oclic_officine_partners', JSON.stringify(updated));
+      safeStorageSet('oclic_officine_partners', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3016,7 +3073,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const deleteOfficinePartner = async (id: string): Promise<void> => {
     setOfficinePartners(prev => {
       const updated = prev.filter(p => p.id !== id);
-      localStorage.setItem('oclic_officine_partners', JSON.stringify(updated));
+      safeStorageSet('oclic_officine_partners', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3030,7 +3087,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } as OfficinePrescriptionOrder;
     setOfficineOrders(prev => {
       const updated = [newOrder, ...prev];
-      localStorage.setItem('oclic_officine_orders', JSON.stringify(updated));
+      safeStorageSet('oclic_officine_orders', JSON.stringify(updated));
       return updated;
     });
     return newOrder;
@@ -3072,7 +3129,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           ...(status === 'LIVRE' ? { deliveredAt: now } : {})
         };
       });
-      localStorage.setItem('oclic_officine_orders', JSON.stringify(updated));
+      safeStorageSet('oclic_officine_orders', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3088,7 +3145,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           ...(notes ? { notes: p.notes ? `${p.notes}\n[${new Date().toLocaleDateString('fr-FR')}] ${notes}` : notes } : {})
         };
       });
-      localStorage.setItem('oclic_clinic_prospects', JSON.stringify(updated));
+      safeStorageSet('oclic_clinic_prospects', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3101,7 +3158,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     } as ClinicProspect;
     setClinicProspects(prev => {
       const updated = [newP, ...prev];
-      localStorage.setItem('oclic_clinic_prospects', JSON.stringify(updated));
+      safeStorageSet('oclic_clinic_prospects', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3109,7 +3166,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const updateClinicProspect = (id: string, data: Partial<ClinicProspect>) => {
     setClinicProspects(prev => {
       const updated = prev.map(p => p.id === id ? { ...p, ...data } : p);
-      localStorage.setItem('oclic_clinic_prospects', JSON.stringify(updated));
+      safeStorageSet('oclic_clinic_prospects', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3117,7 +3174,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const deleteClinicProspect = (id: string) => {
     setClinicProspects(prev => {
       const updated = prev.filter(p => p.id !== id);
-      localStorage.setItem('oclic_clinic_prospects', JSON.stringify(updated));
+      safeStorageSet('oclic_clinic_prospects', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3242,7 +3299,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const saveClinicalScoreCalculation = (rec: ClinicalScoreCalculation) => {
     setClinicalScoreCalculations(prev => {
       const updated = [rec, ...prev.filter(r => r.id !== rec.id)];
-      localStorage.setItem('offline_clinical_scores', JSON.stringify(updated));
+      safeStorageSet('offline_clinical_scores', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3250,7 +3307,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const addNurseVitalRecord = (rec: NurseVitalRecord) => {
     setNurseVitalRecords(prev => {
       const updated = [rec, ...prev];
-      localStorage.setItem('offline_nurse_vitals', JSON.stringify(updated));
+      safeStorageSet('offline_nurse_vitals', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3258,7 +3315,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const addNurseRespiratoryRecord = (rec: NurseRespiratoryRecord) => {
     setNurseRespiratoryRecords(prev => {
       const updated = [rec, ...prev];
-      localStorage.setItem('offline_nurse_resp', JSON.stringify(updated));
+      safeStorageSet('offline_nurse_resp', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3266,7 +3323,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const addFluidBalanceRecord = (rec: FluidBalanceRecord) => {
     setFluidBalanceRecords(prev => {
       const updated = [rec, ...prev];
-      localStorage.setItem('offline_fluid_balances', JSON.stringify(updated));
+      safeStorageSet('offline_fluid_balances', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3274,7 +3331,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const addNurseAdministeredMed = (rec: NurseAdministeredMed) => {
     setNurseAdministeredMeds(prev => {
       const updated = [rec, ...prev];
-      localStorage.setItem('offline_nurse_meds', JSON.stringify(updated));
+      safeStorageSet('offline_nurse_meds', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3282,7 +3339,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const addNurseTargetedTransmission = (rec: NurseTargetedTransmission) => {
     setNurseTargetedTransmissions(prev => {
       const updated = [rec, ...prev];
-      localStorage.setItem('offline_nurse_trans', JSON.stringify(updated));
+      safeStorageSet('offline_nurse_trans', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3290,7 +3347,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const saveMedicalExploration = (rec: MedicalExploration) => {
     setMedicalExplorations(prev => {
       const updated = [rec, ...prev.filter(r => r.id !== rec.id)];
-      localStorage.setItem('offline_medical_explorations', JSON.stringify(updated));
+      safeStorageSet('offline_medical_explorations', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3299,7 +3356,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setMedicalDocuments(prev => {
       const exists = prev.some(d => d.id === doc.id);
       const updated = exists ? prev.map(d => d.id === doc.id ? doc : d) : [doc, ...prev];
-      localStorage.setItem('offline_medical_documents', JSON.stringify(updated));
+      safeStorageSet('offline_medical_documents', JSON.stringify(updated));
       return updated;
     });
   };
@@ -3307,7 +3364,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const deleteMedicalDocument = (id: string) => {
     setMedicalDocuments(prev => {
       const updated = prev.filter(d => d.id !== id);
-      localStorage.setItem('offline_medical_documents', JSON.stringify(updated));
+      safeStorageSet('offline_medical_documents', JSON.stringify(updated));
       return updated;
     });
   };

@@ -44,7 +44,9 @@ export const Dashboard: React.FC = () => {
   // Severe patients on Oxygen or VNI
   const oxygenVniCount = hospitalizations.filter(h =>
     h.status === 'active' &&
-    (h.reason.toLowerCase().includes('vni') || h.reason.toLowerCase().includes('oxygène') || h.roomNumber.includes('VNI'))
+    ((h.reason || '').toLowerCase().includes('vni') ||
+      (h.reason || '').toLowerCase().includes('oxygène') ||
+      (h.roomNumber || '').includes('VNI'))
   ).length;
 
   // Latest critical vitals (SpO2 < 90%)
@@ -322,7 +324,7 @@ export const Dashboard: React.FC = () => {
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-slate-900">{c.patientName || 'Patient'}</span>
                   <span className="text-xxs text-slate-400 font-mono">
-                    {new Date(c.date).toLocaleDateString('fr-FR')}
+                    {c.date ? new Date(c.date).toLocaleDateString('fr-FR') : '--'}
                   </span>
                 </div>
                 <p className="text-xxs text-slate-600 truncate">
