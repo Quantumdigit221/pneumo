@@ -1,0 +1,38 @@
+appId: sn.chrein.pneumo.dpi
+productName: CHREIN DPI Pneumologie
+copyright: Copyright © 2026 CHREIN Kaolack - Service de Pneumologie & Maladies Infectieuses
+electronVersion: 35.1.5
+directories:
+  buildResources: build
+  output: dist-electron
+files:
+  - dist/**/*
+  - electron/**/*
+  - build/icon.png
+  - build/icon.ico
+  - package.json
+  - "!**/*.map"
+asar: true
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+  artifactName: CHREIN-DPI-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: CHREIN DPI Pneumologie
+  uninstallDisplayName: CHREIN DPI Pneumologie
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  language: "1036"
+  installerLanguages:
+    - fr_FR
+    - en_US

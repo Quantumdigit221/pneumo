@@ -1,11 +1,14 @@
 import dotenv from 'dotenv';
-dotenv.config();
-
+import fs from 'fs';
 import express from 'express';
 import compression from 'compression';
 import path from 'path';
-import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Modality, Type, ThinkingLevel } from '@google/genai';
+
+if (process.env.CHREIN_ENV_PATH && fs.existsSync(process.env.CHREIN_ENV_PATH)) {
+  dotenv.config({ path: process.env.CHREIN_ENV_PATH });
+}
+dotenv.config();
 import {
   isMysqlConfigured,
   checkConnection,
@@ -20,7 +23,8 @@ import {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
+  const HOST = process.env.ELECTRON_DESKTOP === '1' ? '127.0.0.1' : '0.0.0.0';
 
   // Compression middleware to drastically reduce API transfer payload sizes (e.g. 1MB json -> ~100KB)
   app.use(compression());
@@ -2749,16 +2753,21 @@ Règles strictes :
 
 
 
-  // Vite middleware setup
+  // Vite middleware setup (lazy-loaded only in dev so packaged production/desktop never imports vite)
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    // Deliver client assets with aggressive caching for static immutable files
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath =
+      process.env.CHREIN_DIST_DIR ||
+      (fs.existsSync(path.join(__dirname, 'index.html'))
+        ? __dirname
+        : path.join(process.cwd(), 'dist'));
+
     app.use(express.static(distPath, {
       maxAge: '1y',
       etag: true,
@@ -2771,8 +2780,8 @@ Règles strictes :
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[O'CLIC SANTE] Full-stack Server running at http://0.0.0.0:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`[O'CLIC SANTE] Full-stack Server running at http://${HOST}:${PORT}`);
     // Run defensive table check on server startup asynchronously
     ensureTablesExist().catch(err => {
       console.error("[Hostinger MySQL] Startup table check failed:", err);
