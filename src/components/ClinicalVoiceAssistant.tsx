@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useStore } from '../store';
 import { startDictationSession, transcribeAudioBlob, DictationSession } from '../utils/audioRecorder';
@@ -14,9 +14,11 @@ import {
   Send,
   CheckCircle2,
   AlertTriangle,
-  Cpu,
+  RotateCcw,
+  UserCheck,
   Loader2,
-  Upload
+  Upload,
+  Stethoscope
 } from 'lucide-react';
 
 interface VoiceMessage {
@@ -25,7 +27,7 @@ interface VoiceMessage {
   text: string;
   actionType?: string;
   actionData?: any;
-  modelBadge?: string;
+  isError?: boolean;
   timestamp: string;
 }
 
@@ -35,6 +37,11 @@ export const ClinicalVoiceAssistant: React.FC = () => {
   const {
     patients,
     beds,
+    consultations,
+    nurseVitalRecords,
+    nurseTargetedTransmissions,
+    clinicalScoreCalculations,
+    labResults,
     currentUser,
     activeCenterId,
     addNurseVitalRecord,
@@ -49,46 +56,43 @@ export const ClinicalVoiceAssistant: React.FC = () => {
   const [isListening, setIsListening] = useState<boolean>(false);
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
-  const [ttsEnabled, setTtsEnabled] = useState<boolean>(true);
+  const [ttsEnabled, setTtsEnabled] = useState<boolean>(false);
+  const [selectedPatientId, setSelectedPatientId] = useState<string>('');
   const [textInput, setTextInput] = useState<string>('');
   const [transcript, setTranscript] = useState<string>('');
-  const [selectedModel, setSelectedModel] = useState<string>('openbiollm');
-  const [executedActionNotice, setExecutedActionNotice] = useState<{ message: string; type: string } | null>(null);
-  const [messages, setMessages] = useState<VoiceMessage[]>([
-    {
-      id: 'welcome-1',
-      sender: 'assistant',
-      text: "Bonjour Confrère. Je suis votre assistante clinique vocale propulsée par le modèle Open Source OpenBioLLM. J'exécute directement vos ordres cliniques : enregistrement des constantes, prescriptions, transmissions ciblées DAR, attribution de lits et calculs de scores.",
-      actionType: 'INFO',
-      modelBadge: 'OpenBioLLM-Llama3-8B',
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    }
-  ]);
+  const [executedActionNotice, setExecutedActionNotice] = useState<{ message: string; type: 'success' | 'warning' } | null>(null);
+  const [messages, setMessages] = useState<VoiceMessage[]>([]);
 
   const [micStatus, setMicStatus] = useState<'IDLE' | 'REQUESTING_MIC' | 'RECORDING' | 'TRANSCRIBING'>('IDLE');
   const [recordingSeconds, setRecordingSeconds] = useState<number>(0);
   const [micErrorMessage, setMicErrorMessage] = useState<string | null>(null);
+
   const dictationSessionRef = useRef<DictationSession | null>(null);
   const recordingTimerRef = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const nativeAudioInputRef = useRef<HTMLInputElement>(null);
 
-  // Keep refs for latest values without triggering re-subscriptions
-  const selectedModelRef = useRef(selectedModel);
-  selectedModelRef.current = selectedModel;
-  const locationPathRef = useRef(location.pathname);
-  locationPathRef.current = location.pathname;
+  const selectedPatient = useMemo(
+    () => patients.find((p) => p.id === selectedPatientId) || null,
+    [patients, selectedPatientId]
+  );
+
+  // Refs to ensure latest store state inside async callbacks
   const patientsRef = useRef(patients);
   patientsRef.current = patients;
   const bedsRef = useRef(beds);
   bedsRef.current = beds;
+  const selectedPatientRef = useRef(selectedPatient);
+  selectedPatientRef.current = selectedPatient;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
 
-  // Scroll to bottom of message drawer
+  // Auto-scroll conversation thread
   useEffect(() => {
     if (isOpen) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages, isOpen]);
+  }, [messages, isOpen, isProcessing]);
 
   // Speech Synthesis
   const speakText = (text: string) => {
@@ -107,12 +111,13 @@ export const ClinicalVoiceAssistant: React.FC = () => {
     utterance.rate = 1.05;
     utterance.pitch = 1.0;
 
-    // Pick a natural French voice if available
     const voices = window.speechSynthesis.getVoices();
-    const frVoice = voices.find(v => v.lang.startsWith('fr') && (v.name.includes('Google') || v.name.includes('Natural') || v.name.includes('Thomas') || v.name.includes('Amelie')));
-    if (frVoice) {
-      utterance.voice = frVoice;
-    }
+    const frVoice = voices.find(
+      (v) =>
+        v.lang.startsWith('fr') &&
+        (v.name.includes('Google') || v.name.includes('Natural') || v.name.includes('Thomas') || v.name.includes('Amelie'))
+    );
+    if (frVoice) utterance.voice = frVoice;
 
     utterance.onstart = () => setIsSpeaking(true);
     utterance.onend = () => setIsSpeaking(false);
@@ -128,7 +133,15 @@ export const ClinicalVoiceAssistant: React.FC = () => {
     setIsSpeaking(false);
   };
 
-  // Universal Dictation Management via MediaRecorder & Gemini Fallback
+  const handleResetConversation = () => {
+    stopSpeaking();
+    setMessages([]);
+    setTranscript('');
+    setMicErrorMessage(null);
+    setExecutedActionNotice(null);
+  };
+
+  // Start Live Mic Dictation
   const startListening = async () => {
     stopSpeaking();
     setMicErrorMessage(null);
@@ -138,8 +151,8 @@ export const ClinicalVoiceAssistant: React.FC = () => {
 
     try {
       const session = await startDictationSession({
-        context: 'Ordre clinique vocal pour dossier patient pneumologie Kaolack',
-        fieldName: 'Assistante Vocale Clinique',
+        context: 'Requête ou ordre clinique pour Assistant Clinique CHREIN',
+        fieldName: 'Assistant Clinique Vocal',
         requestId: 'clinical-voice-assistant',
         onInterimText: (text) => {
           setTranscript(text);
@@ -150,7 +163,7 @@ export const ClinicalVoiceAssistant: React.FC = () => {
             setIsListening(true);
             if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
             recordingTimerRef.current = setInterval(() => {
-              setRecordingSeconds(prev => prev + 1);
+              setRecordingSeconds((prev) => prev + 1);
             }, 1000);
           } else if (status === 'IDLE') {
             setIsListening(false);
@@ -189,7 +202,7 @@ export const ClinicalVoiceAssistant: React.FC = () => {
       const transcribed = await transcribeAudioBlob(
         file,
         file.type || 'audio/mp4',
-        'Ordre clinique vocal pour Assistante Clinique CHREIN'
+        'Requête clinique vocale CHREIN'
       );
       setMicStatus('IDLE');
       if (transcribed && transcribed.trim().length > 1) {
@@ -199,7 +212,7 @@ export const ClinicalVoiceAssistant: React.FC = () => {
       }
     } catch (err: any) {
       setMicStatus('IDLE');
-      setMicErrorMessage(err?.message || "Erreur lors de la transcription audio.");
+      setMicErrorMessage(err?.message || 'Erreur lors de la transcription audio.');
     }
   };
 
@@ -220,7 +233,7 @@ export const ClinicalVoiceAssistant: React.FC = () => {
         if (text && text.trim().length > 1) {
           handleProcessCommand(text.trim());
         }
-      } catch (e) {
+      } catch {
         setMicStatus('IDLE');
         setIsListening(false);
       }
@@ -238,7 +251,6 @@ export const ClinicalVoiceAssistant: React.FC = () => {
     }
   };
 
-  // Listen for modal fallback insert/retry targeted at ClinicalVoiceAssistant & cleanup on unmount
   useEffect(() => {
     const handleInsertSample = (e: any) => {
       if (e?.detail?.requestId === 'clinical-voice-assistant' && e?.detail?.text) {
@@ -266,107 +278,197 @@ export const ClinicalVoiceAssistant: React.FC = () => {
     };
   }, []);
 
-  // Directly execute clinical voice actions into store and UI
-  const executeAction = async (actionType: string, actionData: any, userSpeechText: string) => {
+  // Build real clinical context snapshot for the selected patient
+  const buildCurrentPatientSnapshot = () => {
+    const p = selectedPatientRef.current;
+    if (!p) return null;
+
+    const pBed = beds.find((b) => b.patientId === p.id && b.status === 'occupied');
+    const pVitals = [...nurseVitalRecords]
+      .filter((v) => v.patientId === p.id)
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, 5);
+
+    const pConsults = [...consultations]
+      .filter((c) => c.patientId === p.id)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 3)
+      .map((c) => ({
+        date: c.date,
+        diagnosis: c.diagnosis,
+        symptoms: c.symptoms,
+        medicationsPrescribed: c.twelveSteps?.managementPlan?.medicationsPrescribed || c.prescription || ''
+      }));
+
+    const pTrans = [...nurseTargetedTransmissions]
+      .filter((t) => t.patientId === p.id)
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, 3);
+
+    const pScores = [...clinicalScoreCalculations]
+      .filter((s) => s.patientId === p.id)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 3);
+
+    const pLabs = [...labResults]
+      .filter((l) => l.patientId === p.id)
+      .slice(0, 4);
+
+    return {
+      id: p.id,
+      code: p.code,
+      firstName: p.firstName,
+      lastName: p.lastName,
+      age: p.age,
+      gender: p.gender,
+      bloodGroup: p.bloodGroup,
+      allergies: p.allergies || 'Aucune signalée',
+      chronicConditions: p.chronicConditions || '',
+      smokingHistory: p.smokingHistory,
+      activeHospitalizationBed: pBed ? { roomNumber: pBed.roomNumber, unitType: pBed.unitType } : null,
+      recentVitals: pVitals,
+      recentConsultations: pConsults,
+      recentTransmissionsDAR: pTrans,
+      recentScores: pScores,
+      recentLabResults: pLabs
+    };
+  };
+
+  // Resolve target patient strictly (never silently fall back to patients[0])
+  const resolveTargetPatient = (actionData: any) => {
     const currentPatients = patientsRef.current || [];
-    let targetPatient = currentPatients.find(p => p.id === actionData?.patientId);
-    if (!targetPatient && actionData?.patientName) {
-      targetPatient = currentPatients.find(p =>
-        `${p.firstName} ${p.lastName}`.toLowerCase().includes(String(actionData.patientName).toLowerCase())
+    if (actionData?.patientId) {
+      const byId = currentPatients.find((p) => p.id === actionData.patientId);
+      if (byId) return byId;
+    }
+    if (actionData?.patientName) {
+      const q = String(actionData.patientName).toLowerCase().trim();
+      const byName = currentPatients.find((p) =>
+        `${p.firstName} ${p.lastName}`.toLowerCase().includes(q)
       );
+      if (byName) return byName;
     }
-    if (!targetPatient && currentPatients.length > 0) {
-      targetPatient = currentPatients[0];
+    return selectedPatientRef.current;
+  };
+
+  // Execute verified DPI actions
+  const executeAction = async (actionType: string, actionData: any, userSpeechText: string): Promise<boolean> => {
+    if (!actionType || actionType === 'NONE' || actionType === 'INFO' || actionType === 'MEDICAL_QA') {
+      return false;
     }
 
+    const targetPatient = resolveTargetPatient(actionData);
     let executionNotice = '';
+    let executed = false;
 
-    // Direct store mutations by action type
     switch (actionType) {
       case 'RECORD_VITALS': {
-        if (targetPatient && actionData?.vitals) {
+        if (!targetPatient) {
+          setExecutedActionNotice({
+            message: 'Sélectionnez un patient ci-dessus pour enregistrer ses constantes.',
+            type: 'warning'
+          });
+          return false;
+        }
+        if (actionData?.vitals) {
           const v = actionData.vitals;
           addNurseVitalRecord({
             id: `nv-${Date.now()}`,
             patientId: targetPatient.id,
             centerId: targetPatient.centerId || activeCenterId || 'center-1',
             timestamp: new Date().toISOString(),
-            bp: v.bp || '120/80',
-            pulse: Number(v.pulse) || 80,
-            rr: Number(v.rr) || 20,
-            spo2: Number(v.spo2Ambient) || 95,
-            temperature: Number(v.temperature) || 37.0,
-            nurseName: currentUser?.name || 'Dr. Cheikh Ndao (Ordre vocal)'
+            bp: v.bp || '',
+            pulse: v.pulse !== undefined ? Number(v.pulse) : 0,
+            rr: v.rr !== undefined ? Number(v.rr) : 0,
+            spo2: v.spo2Ambient !== undefined ? Number(v.spo2Ambient) : 0,
+            temperature: v.temperature !== undefined ? Number(v.temperature) : 0,
+            weight: v.weight !== undefined ? Number(v.weight) : undefined,
+            height: v.height !== undefined ? Number(v.height) : undefined,
+            nurseName: currentUser?.name || 'Praticien CHREIN'
           });
-          executionNotice = `Constantes injectées directement pour ${targetPatient.firstName} ${targetPatient.lastName} (TA ${v.bp || '-'}, SpO2 ${v.spo2Ambient || '-'}%, T° ${v.temperature || '-'}°C).`;
+          setSelectedPatientId(targetPatient.id);
+          executionNotice = `Constantes enregistrées pour ${targetPatient.firstName} ${targetPatient.lastName}.`;
+          executed = true;
         }
         break;
       }
 
       case 'PRESCRIBE': {
-        if (targetPatient && actionData?.prescription?.rawText) {
+        if (!targetPatient) {
+          setExecutedActionNotice({
+            message: 'Sélectionnez un patient ci-dessus pour enregistrer la prescription.',
+            type: 'warning'
+          });
+          return false;
+        }
+        if (actionData?.prescription?.rawText) {
           const raw = actionData.prescription.rawText;
           const protoName = actionData.prescription.protocolName || 'Prescription Pneumologie';
-          try {
-            await saveConsultation({
-              ticketId: '',
-              patientId: targetPatient.id,
-              doctorId: currentUser?.id || 'u2',
-              patientName: `${targetPatient.firstName} ${targetPatient.lastName}`,
-              doctorName: currentUser?.name || 'Dr. Cheikh Ndao',
-              serviceName: 'Consultation Spécialisée Pneumologie',
-              date: new Date().toISOString(),
-              weight: 65,
-              temperature: 37.2,
-              bloodPressure: '120/80',
-              symptoms: 'Prescription vocale directe',
-              diagnosis: protoName,
-              prescription: JSON.stringify([{
-                medicineName: protoName,
-                dosage: raw,
-                quantity: 1
-              }]),
-              prescriptionItems: [{
+          await saveConsultation({
+            ticketId: '',
+            patientId: targetPatient.id,
+            doctorId: currentUser?.id || 'u1',
+            patientName: `${targetPatient.firstName} ${targetPatient.lastName}`,
+            doctorName: currentUser?.name || 'Praticien CHREIN',
+            serviceName: 'Consultation Spécialisée Pneumologie',
+            date: new Date().toISOString(),
+            weight: 0,
+            temperature: 0,
+            bloodPressure: '',
+            symptoms: 'Prescription assistée par dictée clinique',
+            diagnosis: protoName,
+            prescription: JSON.stringify([{ medicineName: protoName, dosage: raw, quantity: 1 }]),
+            prescriptionItems: [
+              {
                 medicineId: `m-${Date.now()}`,
                 medicineName: protoName,
                 dosage: raw,
-                duration: 'Selon protocole PNT',
+                duration: 'Selon protocole',
                 quantity: 1
-              }],
-              twelveSteps: {
-                chiefComplaint: 'Prescription directe par assistante vocale',
-                historyOfIllness: 'Prescription générée et validée par ordre vocal direct.',
-                riskFactors: {},
-                vitals: { bp: '120/80', pulse: 80, rr: 20, spo2Ambient: 96, temperature: 37.0 },
-                systems: {} as any,
-                syndromicSummary: protoName,
-                diagnosticHypotheses: [protoName],
-                paraclinicalOrdered: {},
-                diagnoses: [{
+              }
+            ],
+            twelveSteps: {
+              chiefComplaint: 'Prescription assistée',
+              historyOfIllness: '',
+              riskFactors: {},
+              vitals: { bp: '', pulse: 0, rr: 0, spo2Ambient: 0, temperature: 0 },
+              systems: {} as any,
+              syndromicSummary: protoName,
+              diagnosticHypotheses: [protoName],
+              paraclinicalOrdered: {},
+              diagnoses: [
+                {
                   id: `diag-${Date.now()}`,
                   codeCIM11: 'CA22',
                   label: protoName,
                   type: 'PRINCIPAL',
                   status: 'CONFIRME',
                   dateDiagnosed: new Date().toISOString().split('T')[0]
-                }],
-                managementPlan: {
-                  medicationsPrescribed: raw,
-                  nonPharmacological: 'Mesures hygiéno-diététiques et surveillance continue',
-                  followUpDate: new Date(Date.now() + 86400000 * 7).toISOString().split('T')[0]
                 }
+              ],
+              managementPlan: {
+                medicationsPrescribed: raw,
+                nonPharmacological: 'Surveillance clinique et tolérance thérapeutique',
+                followUpDate: new Date(Date.now() + 86400000 * 7).toISOString().split('T')[0]
               }
-            });
-            executionNotice = `Ordonnance « ${protoName} » enregistrée et validée directement pour ${targetPatient.firstName} ${targetPatient.lastName}.`;
-          } catch (e) {
-            console.warn('[Direct Prescribe Notice]:', e);
-          }
+            }
+          });
+          setSelectedPatientId(targetPatient.id);
+          executionNotice = `Ordonnance « ${protoName} » enregistrée pour ${targetPatient.firstName} ${targetPatient.lastName}.`;
+          executed = true;
         }
         break;
       }
 
       case 'ADD_NURSING_DAR': {
-        if (targetPatient && actionData?.transmission) {
+        if (!targetPatient) {
+          setExecutedActionNotice({
+            message: 'Sélectionnez un patient ci-dessus pour enregistrer la transmission DAR.',
+            type: 'warning'
+          });
+          return false;
+        }
+        if (actionData?.transmission) {
           const t = actionData.transmission;
           addNurseTargetedTransmission({
             id: `dar-${Date.now()}`,
@@ -374,232 +476,283 @@ export const ClinicalVoiceAssistant: React.FC = () => {
             patientName: `${targetPatient.firstName} ${targetPatient.lastName}`,
             centerId: targetPatient.centerId || activeCenterId || 'center-1',
             timestamp: new Date().toISOString(),
-            target: t.target || 'Transmission ciblée',
-            data: t.data || 'Constantes surveillées',
-            action: t.action || 'Surveillance continue',
-            result: t.result || 'État stable',
-            nurseName: currentUser?.name || 'Assistante Vocale Clinique',
-            nurseSignature: 'Signature automatique DPI'
+            target: t.target || 'Surveillance clinique',
+            data: t.data || '',
+            action: t.action || '',
+            result: t.result || '',
+            nurseName: currentUser?.name || 'Praticien CHREIN',
+            nurseSignature: 'Validé via Assistant Clinique'
           });
-          executionNotice = `Transmission ciblée DAR enregistrée directement pour ${targetPatient.firstName} ${targetPatient.lastName} (Cible : ${t.target}).`;
+          setSelectedPatientId(targetPatient.id);
+          executionNotice = `Transmission DAR enregistrée pour ${targetPatient.firstName} ${targetPatient.lastName}.`;
+          executed = true;
         }
         break;
       }
 
       case 'ASSIGN_BED': {
-        const bedNum = String(actionData?.bedNumber || '101');
+        if (!targetPatient) {
+          setExecutedActionNotice({
+            message: 'Précisez ou sélectionnez le patient à hospitaliser.',
+            type: 'warning'
+          });
+          return false;
+        }
+        const bedNum = String(actionData?.bedNumber || '').trim();
         const currentBeds = bedsRef.current || [];
-        const matchedBed = currentBeds.find(b => b.roomNumber.toLowerCase().includes(bedNum.toLowerCase())) ||
-                           currentBeds.find(b => b.status === 'available');
-        if (matchedBed && targetPatient) {
+        const matchedBed = bedNum
+          ? currentBeds.find((b) => b.roomNumber.toLowerCase().includes(bedNum.toLowerCase()))
+          : currentBeds.find((b) => b.status === 'available');
+        if (matchedBed) {
           await updateBed(matchedBed.id, {
             status: 'occupied',
             patientId: targetPatient.id,
             patientName: `${targetPatient.firstName} ${targetPatient.lastName}`
           });
-          executionNotice = `Lit ${matchedBed.roomNumber} attribué directement à ${targetPatient.firstName} ${targetPatient.lastName}.`;
+          setSelectedPatientId(targetPatient.id);
+          executionNotice = `Lit ${matchedBed.roomNumber} attribué à ${targetPatient.firstName} ${targetPatient.lastName}.`;
+          executed = true;
+        } else {
+          setExecutedActionNotice({
+            message: `Lit ${bedNum || ''} introuvable ou aucun lit disponible.`,
+            type: 'warning'
+          });
+          return false;
         }
         break;
       }
 
       case 'ADD_PATIENT': {
-        if (actionData?.patient) {
+        if (actionData?.patient?.firstName || actionData?.patient?.lastName) {
           const p = actionData.patient;
           const newPat = await addPatient({
             firstName: p.firstName || 'Nouveau',
             lastName: p.lastName || 'Patient',
-            gender: p.gender || 'M',
-            birthDate: `${new Date().getFullYear() - (p.age || 40)}-01-01`,
-            phone: p.phone || '+221 77 000 00 00',
-            address: p.address || 'Région de Kaolack',
-            chronicConditions: 'Créé directement par assistante vocale clinique',
+            gender: p.gender === 'F' ? 'F' : 'M',
+            birthDate: `${new Date().getFullYear() - (Number(p.age) || 40)}-01-01`,
+            phone: p.phone || '',
+            address: p.address || 'Kaolack',
+            chronicConditions: '',
             smokingHistory: { isSmoker: false, biomassExposure: false }
           });
-          executionNotice = `Nouveau patient ${p.firstName} ${p.lastName} créé directement dans le DPI (${newPat?.code || 'N° IP généré'}).`;
+          if (newPat?.id) setSelectedPatientId(newPat.id);
+          executionNotice = `Dossier créé pour ${p.firstName || ''} ${p.lastName || ''} (${newPat?.code || 'IP généré'}).`;
+          executed = true;
         }
         break;
       }
 
       case 'CALCULATE_SCORE': {
-        if (targetPatient && actionData?.scoreCalculation) {
+        if (!targetPatient) {
+          setExecutedActionNotice({
+            message: 'Sélectionnez un patient ci-dessus pour consigner ce score.',
+            type: 'warning'
+          });
+          return false;
+        }
+        if (actionData?.scoreCalculation && actionData.scoreCalculation.calculatedValue !== undefined) {
           const sc = actionData.scoreCalculation;
           saveClinicalScoreCalculation({
             id: `sc-${Date.now()}`,
             patientId: targetPatient.id,
             patientName: `${targetPatient.firstName} ${targetPatient.lastName}`,
-            scoreId: sc.scoreId || 'WELLS_EP',
+            scoreId: sc.scoreId || 'CLINICAL_SCORE',
             scoreName: sc.scoreName || 'Score Clinique',
-            scoreCategory: sc.scoreCategory || 'EMBOLISM',
-            calculatedValue: sc.calculatedValue || 4.5,
-            variables: sc.variables || {},
-            interpretation: sc.interpretation || 'Calcul direct',
-            clinicalRecommendation: sc.clinicalRecommendation || 'Prise en charge selon protocole',
-            referenceSource: sc.referenceSource || 'PNT / CHREIN 2026',
+            scoreCategory: sc.scoreCategory || 'RESPIRATORY',
+            calculatedValue: Number(sc.calculatedValue),
+            variables: {},
+            interpretation: sc.interpretation || '',
+            clinicalRecommendation: sc.clinicalRecommendation || '',
+            referenceSource: sc.referenceSource || 'CHREIN Pneumologie',
             date: new Date().toISOString()
           });
-          executionNotice = `${sc.scoreName} calculé et consigné directement (Valeur : ${sc.calculatedValue}).`;
+          setSelectedPatientId(targetPatient.id);
+          executionNotice = `${sc.scoreName} (${sc.calculatedValue}) consigné pour ${targetPatient.firstName} ${targetPatient.lastName}.`;
+          executed = true;
         }
         break;
       }
 
       case 'SEARCH_PATIENT': {
         if (targetPatient) {
-          executionNotice = `Dossier patient de ${targetPatient.firstName} ${targetPatient.lastName} (${targetPatient.code}) ouvert directement.`;
+          setSelectedPatientId(targetPatient.id);
+          executionNotice = `Patient ciblé : ${targetPatient.firstName} ${targetPatient.lastName} (${targetPatient.code}).`;
+          executed = true;
         }
         break;
       }
 
-      default: {
+      case 'NAVIGATE': {
         if (actionData?.targetRoute) {
-          executionNotice = `Navigation directe effectuée vers ${actionData.targetRoute}.`;
+          executionNotice = `Navigation vers ${actionData.targetRoute}`;
+          executed = true;
         }
         break;
       }
+
+      default:
+        break;
     }
 
     if (executionNotice) {
-      setExecutedActionNotice({
-        message: executionNotice,
-        type: 'success'
-      });
-      setTimeout(() => setExecutedActionNotice(null), 8000);
+      setExecutedActionNotice({ message: executionNotice, type: 'success' });
+      setTimeout(() => setExecutedActionNotice(null), 6500);
     }
 
-    // 2. Dispatch custom event for real-time form bindings (Consultations, Nursing, Scores)
-    const eventDetail = {
-      actionType,
-      actionData,
-      rawSpeech: userSpeechText,
-      timestamp: Date.now()
-    };
-    window.dispatchEvent(new CustomEvent('clinical-voice-action', { detail: eventDetail }));
+    if (executed) {
+      window.dispatchEvent(
+        new CustomEvent('clinical-voice-action', {
+          detail: {
+            actionType,
+            actionData,
+            rawSpeech: userSpeechText,
+            timestamp: Date.now()
+          }
+        })
+      );
+    }
 
-    // 3. Perform navigation if required
-    if (actionData?.targetRoute && location.pathname !== actionData.targetRoute) {
+    if (actionData?.targetRoute && location.pathname !== actionData.targetRoute && executed) {
       navigate(actionData.targetRoute);
     }
+
+    return executed;
   };
 
   const handleProcessCommand = async (command: string) => {
-    if (!command || !command.trim()) return;
+    if (!command || !command.trim() || isProcessing) return;
     const cleanCmd = command.trim();
     setTextInput('');
     setTranscript('');
 
-    // Add user message to thread
+    const historySnapshot = messagesRef.current
+      .filter((m) => !m.isError)
+      .slice(-12)
+      .map((m) => ({ sender: m.sender, text: m.text }));
+
     const userMsg: VoiceMessage = {
       id: `usr-${Date.now()}`,
       sender: 'user',
       text: cleanCmd,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
-    setMessages(prev => [...prev, userMsg]);
+    setMessages((prev) => [...prev, userMsg]);
     setIsProcessing(true);
 
     try {
+      const availableBeds = beds.filter((b) => b.status === 'available');
+      const occupiedBeds = beds.filter((b) => b.status === 'occupied');
+
       const response = await fetch('/api/voice-assistant-llm', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userSpeech: cleanCmd,
-          modelKey: selectedModel,
+          history: historySnapshot,
           currentRoute: location.pathname,
-          availablePatients: patients.map(p => ({
+          currentPatient: buildCurrentPatientSnapshot(),
+          availablePatients: patients.map((p) => ({
             id: p.id,
             firstName: p.firstName,
             lastName: p.lastName,
             code: p.code,
-            age: p.age
-          }))
+            age: p.age,
+            gender: p.gender,
+            chronicConditions: p.chronicConditions
+          })),
+          serviceContext: {
+            clinician: currentUser?.name || 'Praticien',
+            role: currentUser?.role || 'CLINICIAN',
+            bedsSummary: {
+              total: beds.length,
+              available: availableBeds.length,
+              occupied: occupiedBeds.length,
+              availableRooms: availableBeds.map((b) => b.roomNumber)
+            }
+          }
         })
       });
 
+      const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(`HTTP Error: ${response.status}`);
+        throw new Error(data?.error || `Erreur serveur (${response.status})`);
       }
 
-      const data = await response.json();
+      let wasActionExecuted = false;
+      if (data.actionType && data.actionType !== 'NONE') {
+        wasActionExecuted = await executeAction(data.actionType, data.actionData || {}, cleanCmd);
+      }
 
       const assistantMsg: VoiceMessage = {
         id: `asst-${Date.now()}`,
         sender: 'assistant',
-        text: data.displayText || data.spokenResponse || 'Ordre clinique exécuté directement.',
-        actionType: data.actionType,
+        text: data.displayText || data.spokenResponse || '',
+        actionType: wasActionExecuted ? data.actionType : undefined,
         actionData: data.actionData,
-        modelBadge: data.modelInfo?.name || 'OpenBioLLM-Llama3-8B',
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
 
-      setMessages(prev => [...prev, assistantMsg]);
+      setMessages((prev) => [...prev, assistantMsg]);
 
-      // Direct execution of tasks
-      if (data.actionType && data.actionData) {
-        await executeAction(data.actionType, data.actionData, cleanCmd);
-      }
-
-      // Vocalize decisive spoken response
       if (data.spokenResponse) {
         speakText(data.spokenResponse);
       }
     } catch (err: any) {
-      console.error('[Voice Assistant Client Error]:', err);
-      const fallbackMsg: VoiceMessage = {
+      const errorMsg: VoiceMessage = {
         id: `err-${Date.now()}`,
         sender: 'assistant',
-        text: `⚠️ Désolé, une anomalie s'est produite lors de l'analyse vocale. Vous pouvez réitérer votre demande.`,
-        actionType: 'INFO',
+        text: err?.message || "Impossible de joindre l'assistant clinique IA pour le moment.",
+        isError: true,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
-      setMessages(prev => [...prev, fallbackMsg]);
+      setMessages((prev) => [...prev, errorMsg]);
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const quickPrompts = [
-    { label: '🩺 Constantes 13/8 - 94%', prompt: 'Enregistrer constantes : tension 13 8 pouls 82 saturation 94 température 38.2 fréquence respiratoire 22' },
-    { label: '💊 Prescrire 2RHZE', prompt: 'Prescrire protocole tuberculose phase intensive 2RHZE' },
-    { label: '💊 Prescrire BPCO', prompt: 'Prescrire exacerbation BPCO' },
-    { label: '📋 Transmission DAR Dyspnée', prompt: 'Transmission DAR cible dyspnée données SpO2 88% action oxygène 3L résultat SpO2 95%' },
-    { label: '🛏️ Attribuer lit 102', prompt: 'Attribuer le lit 102 à Mamadou Diop' },
-    { label: '📊 Score de Wells', prompt: 'Calculer le score de Wells' },
-    { label: '👤 Chercher Mamadou Diop', prompt: 'Chercher le patient Mamadou Diop' },
-    { label: '🫁 CAT Hémoptysie', prompt: 'Quelle est la conduite à tenir devant une hémoptysie ?' }
-  ];
-
   return (
     <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end">
       {/* Expanded Console Window */}
       {isOpen && (
-        <div className="mb-3 w-96 sm:w-[440px] max-w-[calc(100vw-2rem)] bg-white rounded-2xl shadow-2xl border border-slate-200/90 overflow-hidden flex flex-col transition-all duration-200 ease-out animate-in fade-in slide-in-from-bottom-4">
+        <div className="mb-3 w-96 sm:w-[440px] max-w-[calc(100vw-2rem)] bg-white rounded-2xl shadow-2xl border border-slate-200/90 overflow-hidden flex flex-col transition-all duration-200 ease-out">
           {/* Header */}
-          <div className="bg-gradient-to-r from-teal-700 via-teal-800 to-slate-900 text-white p-3.5 flex items-center justify-between">
+          <div className="bg-slate-900 text-white px-4 py-3 flex items-center justify-between">
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-8 h-8 rounded-xl bg-teal-500/30 border border-teal-400/40 flex items-center justify-center text-teal-200">
-                <Sparkles className="w-4 h-4" />
+              <div className="w-8 h-8 rounded-xl bg-teal-600/30 border border-teal-400/40 flex items-center justify-center text-teal-200 shrink-0">
+                <Stethoscope className="w-4 h-4" />
               </div>
               <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-xs font-bold truncate">Assistante Vocale Clinique</h3>
-                  <span className="text-3xs px-1.5 py-0.2 bg-teal-500/20 text-teal-300 font-semibold rounded-full border border-teal-400/30">
-                    Open Source
-                  </span>
-                </div>
-                <p className="text-3xs text-teal-200/80 truncate">CHREIN Kaolack • Mains libres</p>
+                <h3 className="text-xs font-bold truncate">Assistant Clinique IA</h3>
+                <p className="text-[10px] text-slate-300 truncate">
+                  {selectedPatient
+                    ? `${selectedPatient.firstName} ${selectedPatient.lastName} (${selectedPatient.code})`
+                    : 'Mode général • CHREIN Kaolack'}
+                </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 shrink-0">
+              {messages.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleResetConversation}
+                  className="p-1.5 text-slate-300 hover:text-white hover:bg-white/10 rounded-lg transition cursor-pointer"
+                  title="Nouvelle conversation (effacer l'historique)"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
                   if (isSpeaking) stopSpeaking();
                   setTtsEnabled(!ttsEnabled);
                 }}
-                className={`p-1.5 rounded-lg transition text-xs ${
-                  ttsEnabled ? 'text-teal-200 hover:bg-teal-700/50' : 'text-slate-400 hover:bg-teal-700/50'
+                className={`p-1.5 rounded-lg transition cursor-pointer ${
+                  ttsEnabled ? 'text-teal-300 hover:bg-white/10' : 'text-slate-400 hover:bg-white/10'
                 }`}
-                title={ttsEnabled ? 'Voix activée (cliquer pour couper)' : 'Voix coupée (cliquer pour activer)'}
+                title={ttsEnabled ? 'Lecture vocale activée' : 'Lecture vocale muette (activer)'}
               >
                 {ttsEnabled ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
               </button>
@@ -607,52 +760,58 @@ export const ClinicalVoiceAssistant: React.FC = () => {
                 type="button"
                 onClick={() => {
                   stopSpeaking();
-                  stopListening();
+                  if (isListening) stopListening();
                   setIsOpen(false);
                 }}
-                className="p-1.5 text-slate-300 hover:text-white hover:bg-teal-700/50 rounded-lg transition"
+                className="p-1.5 text-slate-300 hover:text-white hover:bg-white/10 rounded-lg transition cursor-pointer"
+                title="Réduire"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
           </div>
 
-          {/* Model Switcher Bar */}
-          <div className="px-3.5 py-2 bg-slate-100 border-b border-slate-200 flex items-center justify-between text-xxs">
-            <div className="flex items-center gap-1.5 text-slate-600 font-medium">
-              <Cpu className="w-3.5 h-3.5 text-teal-700" />
-              <span>Modèle Santé :</span>
-            </div>
+          {/* Patient Context Selector Bar */}
+          <div className="px-3.5 py-2 bg-slate-50 border-b border-slate-200 flex items-center gap-2 text-xxs">
+            <UserCheck className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+            <span className="text-slate-600 font-semibold shrink-0">Patient :</span>
             <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              className="bg-white border border-slate-300 rounded-md px-2 py-0.5 text-slate-800 font-semibold text-xxs focus:outline-none focus:ring-1 focus:ring-teal-600"
+              value={selectedPatientId}
+              onChange={(e) => setSelectedPatientId(e.target.value)}
+              className="flex-1 min-w-0 bg-white border border-slate-300 rounded-lg px-2 py-1 text-slate-800 font-semibold text-[11px] focus:outline-none focus:ring-1 focus:ring-teal-600"
             >
-              <option value="openbiollm">OpenBioLLM-Llama3-8B (SOTA Santé)</option>
-              <option value="biomistral">BioMistral-7B (PMC & Cochrane)</option>
-              <option value="medgemma">MedGemma-Health (DeepMind)</option>
-              <option value="clinical-camel">Clinical-Camel-70B (Protocoles Afrique)</option>
+              <option value="">Aucun patient ciblé (mode général)</option>
+              {patients.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.firstName} {p.lastName} ({p.code} • {p.age} ans)
+                </option>
+              ))}
             </select>
           </div>
 
-          {/* Direct Execution Banner */}
+          {/* Execution / Warning Banner */}
           {executedActionNotice && (
-            <div className="px-3.5 py-2 bg-emerald-50 border-b border-emerald-200 text-emerald-900 text-xs flex items-center justify-between animate-in fade-in slide-in-from-top-1">
+            <div
+              className={`px-3.5 py-2 border-b text-xs flex items-center justify-between ${
+                executedActionNotice.type === 'warning'
+                  ? 'bg-amber-50 border-amber-200 text-amber-900'
+                  : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              }`}
+            >
               <div className="flex items-center gap-2 min-w-0">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-                <div className="min-w-0">
-                  <span className="font-extrabold text-3xs uppercase tracking-wider text-emerald-700 block">
-                    ⚡ Tâche Exécutée Directement
-                  </span>
-                  <span className="text-xxs text-emerald-900 font-semibold line-clamp-2 block leading-tight">
-                    {executedActionNotice.message}
-                  </span>
-                </div>
+                {executedActionNotice.type === 'warning' ? (
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                )}
+                <span className="text-[11px] font-semibold line-clamp-2 leading-tight">
+                  {executedActionNotice.message}
+                </span>
               </div>
               <button
                 type="button"
                 onClick={() => setExecutedActionNotice(null)}
-                className="text-emerald-600 hover:text-emerald-800 p-0.5 ml-2 cursor-pointer flex-shrink-0"
+                className="text-slate-500 hover:text-slate-800 p-0.5 ml-2 cursor-pointer shrink-0"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -668,12 +827,12 @@ export const ClinicalVoiceAssistant: React.FC = () => {
             className="hidden"
           />
 
-          {/* Mic Permission or Error Alert Banner with Direct Native Fallback */}
+          {/* Mic Error Banner with Direct Native OS Capture Fallback */}
           {micErrorMessage && (
             <div className="px-3.5 py-2.5 bg-rose-50 border-b border-rose-200 text-rose-900 text-xs flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+              <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
               <div className="flex-1 space-y-1.5">
-                <p className="font-bold text-xxs leading-tight">{micErrorMessage}</p>
+                <p className="font-bold text-[11px] leading-tight">{micErrorMessage}</p>
                 <div className="flex flex-wrap items-center gap-1.5">
                   <button
                     type="button"
@@ -686,13 +845,15 @@ export const ClinicalVoiceAssistant: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => {
-                      window.dispatchEvent(new CustomEvent('microphone-permission-denied', {
-                        detail: {
-                          message: micErrorMessage,
-                          fieldName: 'Assistante Vocale Clinique',
-                          requestId: 'clinical-voice-assistant',
-                        },
-                      }));
+                      window.dispatchEvent(
+                        new CustomEvent('microphone-permission-denied', {
+                          detail: {
+                            message: micErrorMessage,
+                            fieldName: 'Assistant Clinique Vocal',
+                            requestId: 'clinical-voice-assistant'
+                          }
+                        })
+                      );
                     }}
                     className="px-2 py-1 bg-white hover:bg-rose-100 border border-rose-300 text-rose-800 rounded-md text-[10px] font-bold transition cursor-pointer"
                   >
@@ -710,57 +871,45 @@ export const ClinicalVoiceAssistant: React.FC = () => {
             </div>
           )}
 
-          {/* Active Speaking / Listening Waveform & Recording Timer Indicator */}
+          {/* Active Mic / Processing Status Strip */}
           {(isListening || isSpeaking || isProcessing || micStatus !== 'IDLE') && (
-            <div className={`px-3.5 py-2 border-b flex items-center justify-between ${
-              micStatus === 'RECORDING'
-                ? 'bg-rose-50 border-rose-200'
-                : micStatus === 'TRANSCRIBING'
-                ? 'bg-blue-50 border-blue-200'
-                : 'bg-teal-50 border-teal-100'
-            }`}>
+            <div
+              className={`px-3.5 py-2 border-b flex items-center justify-between ${
+                micStatus === 'RECORDING'
+                  ? 'bg-rose-50 border-rose-200'
+                  : micStatus === 'TRANSCRIBING' || isProcessing
+                  ? 'bg-slate-100 border-slate-200'
+                  : 'bg-teal-50 border-teal-100'
+              }`}
+            >
               <div className="flex items-center gap-2">
                 {micStatus === 'RECORDING' ? (
                   <>
-                    <span className="w-2.5 h-2.5 bg-rose-600 rounded-full animate-ping"></span>
-                    <div className="flex items-center gap-1">
-                      <span className="text-xs font-black text-rose-700 tracking-wider font-mono">
-                        00:{recordingSeconds < 10 ? `0${recordingSeconds}` : recordingSeconds}
-                      </span>
-                      <div className="flex items-center gap-0.5 h-3 ml-1">
-                        <span className="w-1 h-3 bg-rose-500 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
-                        <span className="w-1 h-4 bg-rose-600 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
-                        <span className="w-1 h-3 bg-rose-500 rounded-full animate-bounce"></span>
-                      </div>
-                    </div>
-                    <span className="text-xxs font-bold text-rose-800 ml-1">
-                      Enregistrement en cours... Parlez
+                    <span className="w-2 h-2 bg-rose-600 rounded-full"></span>
+                    <span className="text-xs font-black text-rose-700 font-mono tabular-nums">
+                      00:{recordingSeconds < 10 ? `0${recordingSeconds}` : recordingSeconds}
                     </span>
+                    <span className="text-[11px] font-bold text-rose-800">Écoute en cours...</span>
                   </>
                 ) : micStatus === 'REQUESTING_MIC' ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 text-teal-700 animate-spin" />
-                    <span className="text-xxs font-bold text-teal-800">
-                      Demande d'accès au microphone...
-                    </span>
+                    <span className="text-[11px] font-bold text-teal-800">Activation du micro...</span>
                   </>
                 ) : micStatus === 'TRANSCRIBING' ? (
                   <>
-                    <Loader2 className="w-3.5 h-3.5 text-blue-700 animate-spin" />
-                    <span className="text-xxs font-bold text-blue-800">
-                      Transcription audio par l'IA médicale...
-                    </span>
+                    <Loader2 className="w-3.5 h-3.5 text-slate-700 animate-spin" />
+                    <span className="text-[11px] font-bold text-slate-800">Transcription en cours...</span>
+                  </>
+                ) : isProcessing ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 text-teal-700 animate-spin" />
+                    <span className="text-[11px] font-bold text-teal-900">Analyse clinique en cours...</span>
                   </>
                 ) : (
                   <>
-                    <div className="flex items-center gap-0.5 h-3">
-                      <span className="w-1 h-3 bg-teal-600 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
-                      <span className="w-1 h-3 bg-teal-600 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
-                      <span className="w-1 h-3 bg-teal-600 rounded-full animate-bounce"></span>
-                    </div>
-                    <span className="text-xxs font-bold text-teal-800">
-                      {isSpeaking ? 'Synthèse vocale en cours...' : 'Raisonnement clinique Open Source...'}
-                    </span>
+                    <Volume2 className="w-3.5 h-3.5 text-teal-700" />
+                    <span className="text-[11px] font-bold text-teal-800">Lecture vocale...</span>
                   </>
                 )}
               </div>
@@ -769,23 +918,23 @@ export const ClinicalVoiceAssistant: React.FC = () => {
                 <button
                   type="button"
                   onClick={stopListening}
-                  className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white text-3xs font-black rounded-lg shadow-xs transition"
+                  className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-black rounded-lg transition cursor-pointer"
                 >
-                  Terminer
+                  Envoyer
                 </button>
               ) : isSpeaking ? (
                 <button
                   type="button"
                   onClick={stopSpeaking}
-                  className="text-3xs text-teal-700 font-semibold hover:underline"
+                  className="text-[10px] text-teal-700 font-bold hover:underline cursor-pointer"
                 >
-                  Arrêter
+                  Couper
                 </button>
               ) : null}
             </div>
           )}
 
-          {/* Live Transcript Bubble */}
+          {/* Live Transcript Preview */}
           {transcript && (
             <div className="px-3.5 py-2 bg-amber-50/80 border-b border-amber-200 text-amber-900 text-xs italic">
               « {transcript} »
@@ -793,57 +942,54 @@ export const ClinicalVoiceAssistant: React.FC = () => {
           )}
 
           {/* Conversation Thread */}
-          <div className="p-3.5 max-h-72 overflow-y-auto space-y-3 bg-slate-50/50 text-xs">
-            {messages.map((m) => (
-              <div
-                key={m.id}
-                className={`flex flex-col ${m.sender === 'user' ? 'items-end' : 'items-start'}`}
-              >
-                <div
-                  className={`p-3 rounded-2xl max-w-[90%] shadow-xs leading-relaxed ${
-                    m.sender === 'user'
-                      ? 'bg-teal-700 text-white rounded-tr-xs'
-                      : 'bg-white text-slate-800 border border-slate-200/80 rounded-tl-xs'
-                  }`}
-                >
-                  {m.sender === 'assistant' && m.modelBadge && (
-                    <div className="flex items-center gap-1.5 mb-1.5 pb-1 border-b border-slate-100 text-3xs text-teal-700 font-bold">
-                      <Sparkles className="w-3 h-3" />
-                      <span>{m.modelBadge}</span>
-                    </div>
-                  )}
-
-                  {/* Message Body with clean markdown linebreaks */}
-                  <div className="space-y-1 whitespace-pre-line text-xs font-normal">
-                    {m.text}
-                  </div>
-
-                  {/* Action pill if an action was executed */}
-                  {m.actionType && m.actionType !== 'INFO' && (
-                    <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center gap-1.5 text-3xs font-bold text-emerald-700 bg-emerald-50/70 px-2 py-1 rounded-md">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
-                      <span>⚡ Tâche Exécutée Directement dans le DPI : {m.actionType}</span>
-                    </div>
-                  )}
+          <div className="p-3.5 h-72 overflow-y-auto space-y-3 bg-slate-50/60 text-xs">
+            {messages.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center px-4 space-y-2.5 text-slate-500">
+                <div className="w-10 h-10 rounded-xl bg-teal-50 border border-teal-200 flex items-center justify-center text-teal-700">
+                  <Sparkles className="w-5 h-5" />
                 </div>
-                <span className="text-3xs text-slate-400 mt-0.5 px-1">{m.timestamp}</span>
+                <div className="space-y-1">
+                  <p className="text-xs font-bold text-slate-800">
+                    {selectedPatient
+                      ? `Contexte actif : ${selectedPatient.firstName} ${selectedPatient.lastName}`
+                      : 'Prêt pour vos questions et ordres cliniques'}
+                  </p>
+                  <p className="text-[11px] text-slate-500 leading-relaxed">
+                    Posez une question médicale, demandez une synthèse du dossier sélectionné, vérifiez une interaction ou dictez des constantes, transmissions DAR ou prescriptions.
+                  </p>
+                </div>
               </div>
-            ))}
-            <div ref={messagesEndRef} />
-          </div>
+            ) : (
+              messages.map((m) => (
+                <div
+                  key={m.id}
+                  className={`flex flex-col ${m.sender === 'user' ? 'items-end' : 'items-start'}`}
+                >
+                  <div
+                    className={`p-3 rounded-2xl max-w-[92%] shadow-2xs leading-relaxed ${
+                      m.sender === 'user'
+                        ? 'bg-teal-700 text-white rounded-tr-xs'
+                        : m.isError
+                        ? 'bg-rose-50 text-rose-900 border border-rose-200 rounded-tl-xs'
+                        : 'bg-white text-slate-800 border border-slate-200 rounded-tl-xs'
+                    }`}
+                  >
+                    <div className="space-y-1 whitespace-pre-line text-xs font-normal">
+                      {m.text}
+                    </div>
 
-          {/* Quick Prompts Chips */}
-          <div className="px-3 py-2 bg-white border-t border-slate-100 flex items-center gap-1.5 overflow-x-auto scrollbar-none">
-            {quickPrompts.map((qp, idx) => (
-              <button
-                key={idx}
-                type="button"
-                onClick={() => handleProcessCommand(qp.prompt)}
-                className="whitespace-nowrap px-2.5 py-1 bg-slate-100 hover:bg-teal-50 hover:text-teal-700 text-slate-600 rounded-full text-3xs font-semibold transition border border-slate-200/80 cursor-pointer"
-              >
-                {qp.label}
-              </button>
-            ))}
+                    {m.actionType && (
+                      <div className="mt-2 pt-1.5 border-t border-slate-100 flex items-center gap-1.5 text-[10px] font-bold text-emerald-700 bg-emerald-50/80 px-2 py-1 rounded-md">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>Action DPI exécutée : {m.actionType}</span>
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-slate-400 mt-0.5 px-1">{m.timestamp}</span>
+                </div>
+              ))
+            )}
+            <div ref={messagesEndRef} />
           </div>
 
           {/* Input & Mic Bar */}
@@ -851,12 +997,13 @@ export const ClinicalVoiceAssistant: React.FC = () => {
             <button
               type="button"
               onClick={toggleListening}
-              className={`p-2.5 rounded-full shadow-xs transition flex-shrink-0 ${
+              disabled={isProcessing}
+              className={`p-2.5 rounded-full shadow-xs transition shrink-0 cursor-pointer ${
                 isListening
-                  ? 'bg-rose-600 text-white animate-pulse ring-4 ring-rose-200'
-                  : 'bg-teal-700 text-white hover:bg-teal-800'
+                  ? 'bg-rose-600 text-white ring-4 ring-rose-200'
+                  : 'bg-teal-700 text-white hover:bg-teal-800 disabled:opacity-50'
               }`}
-              title={isListening ? "Arrêter l'écoute" : "Activer le micro"}
+              title={isListening ? "Terminer et envoyer" : 'Dicter au microphone'}
             >
               {isListening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
             </button>
@@ -872,13 +1019,13 @@ export const ClinicalVoiceAssistant: React.FC = () => {
                 type="text"
                 value={textInput}
                 onChange={(e) => setTextInput(e.target.value)}
-                placeholder="Dicter ou saisir un ordre clinique direct..."
+                placeholder="Question médicale ou instruction DPI..."
                 className="flex-1 bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 focus:bg-white"
               />
               <button
                 type="submit"
                 disabled={!textInput.trim() || isProcessing}
-                className="p-2 bg-teal-700 text-white rounded-xl hover:bg-teal-800 disabled:opacity-40 transition cursor-pointer flex-shrink-0"
+                className="p-2 bg-teal-700 text-white rounded-xl hover:bg-teal-800 disabled:opacity-40 transition cursor-pointer shrink-0"
               >
                 <Send className="w-3.5 h-3.5" />
               </button>
@@ -889,20 +1036,15 @@ export const ClinicalVoiceAssistant: React.FC = () => {
 
       {/* Floating Minimized Execution Toast */}
       {executedActionNotice && !isOpen && (
-        <div className="mb-2 px-3.5 py-2.5 bg-slate-900/95 text-white rounded-xl shadow-2xl border border-emerald-500/50 text-xs flex items-center gap-2 max-w-sm animate-in fade-in slide-in-from-bottom-2">
-          <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-          <div className="min-w-0 flex-1">
-            <span className="font-extrabold text-3xs uppercase tracking-wider text-emerald-400 block">
-              ⚡ Tâche Exécutée Directement
-            </span>
-            <span className="text-xxs text-slate-200 font-medium line-clamp-2 block leading-tight">
-              {executedActionNotice.message}
-            </span>
-          </div>
+        <div className="mb-2 px-3.5 py-2.5 bg-slate-900 text-white rounded-xl shadow-2xl border border-teal-500/40 text-xs flex items-center gap-2 max-w-sm">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span className="text-[11px] text-slate-100 font-medium line-clamp-2 flex-1 leading-tight">
+            {executedActionNotice.message}
+          </span>
           <button
             type="button"
             onClick={() => setExecutedActionNotice(null)}
-            className="text-slate-400 hover:text-white p-0.5 ml-1"
+            className="text-slate-400 hover:text-white p-0.5 ml-1 cursor-pointer"
           >
             <X className="w-3 h-3" />
           </button>
@@ -914,55 +1056,52 @@ export const ClinicalVoiceAssistant: React.FC = () => {
         <button
           type="button"
           onClick={() => setIsOpen(!isOpen)}
-          className={`flex items-center gap-2 px-3.5 py-2.5 rounded-full shadow-lg border transition-all duration-200 ${
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-full shadow-lg border transition-all duration-200 cursor-pointer ${
             isOpen
               ? 'bg-slate-900 text-white border-slate-800'
               : 'bg-white text-slate-800 border-slate-200 hover:shadow-xl hover:border-teal-500'
           }`}
         >
-          <div className="relative">
-            <div className={`w-7 h-7 rounded-full flex items-center justify-center ${
+          <div
+            className={`w-7 h-7 rounded-full flex items-center justify-center ${
               isListening
-                ? 'bg-rose-600 text-white animate-pulse'
+                ? 'bg-rose-600 text-white'
                 : isSpeaking
                 ? 'bg-teal-600 text-white'
                 : 'bg-teal-100 text-teal-800'
-            }`}>
-              {isListening ? <Mic className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />}
-            </div>
-            {isListening && (
-              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full animate-ping"></span>
-            )}
+            }`}
+          >
+            {isListening ? <Mic className="w-4 h-4" /> : <Sparkles className="w-4 h-4" />}
           </div>
 
           <div className="text-left hidden sm:block">
-            <div className="flex items-center gap-1">
-              <span className="text-xs font-bold leading-tight">Voix & IA Clinique</span>
-              <span className="text-3xs px-1 bg-teal-100 text-teal-800 rounded font-semibold">
-                OpenBioLLM
-              </span>
-            </div>
-            <p className="text-3xs text-slate-500 leading-tight">
-              {isListening ? 'Écoute active...' : isSpeaking ? 'En train de parler...' : 'Cliquez pour parler'}
+            <span className="text-xs font-bold leading-tight block">Assistant Clinique</span>
+            <p className="text-[10px] text-slate-500 leading-tight">
+              {isListening
+                ? 'Écoute active...'
+                : isProcessing
+                ? 'Analyse...'
+                : selectedPatient
+                ? `${selectedPatient.firstName} ${selectedPatient.lastName}`
+                : 'Voix & Aide Médicale'}
             </p>
           </div>
 
           {isOpen ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronUp className="w-4 h-4 text-slate-400" />}
         </button>
 
-        {/* Dedicated Quick-Mic Push Button */}
         {!isOpen && (
           <button
             type="button"
             onClick={toggleListening}
-            className={`w-11 h-11 rounded-full shadow-xl flex items-center justify-center transition-all ${
+            className={`w-10 h-10 rounded-full shadow-xl flex items-center justify-center transition-all cursor-pointer ${
               isListening
-                ? 'bg-rose-600 text-white ring-4 ring-rose-300 animate-pulse'
-                : 'bg-teal-700 text-white hover:bg-teal-800 hover:scale-105'
+                ? 'bg-rose-600 text-white ring-4 ring-rose-300'
+                : 'bg-teal-700 text-white hover:bg-teal-800'
             }`}
-            title="Activer la dictée vocale instantanée"
+            title="Activer la dictée vocale"
           >
-            <Mic className="w-5 h-5" />
+            <Mic className="w-4 h-4" />
           </button>
         )}
       </div>

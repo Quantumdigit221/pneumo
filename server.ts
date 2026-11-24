@@ -5,7 +5,7 @@ import express from 'express';
 import compression from 'compression';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI, Modality } from '@google/genai';
+import { GoogleGenAI, Modality, Type, ThinkingLevel } from '@google/genai';
 import {
   isMysqlConfigured,
   checkConnection,
@@ -661,563 +661,192 @@ Fournis une réponse STRICTEMENT au format JSON valide avec exactement ces 4 cl�
     }
   });
 
-  // Clinical Voice Assistant powered by Open-Source Health LLM (Section 10 of Cahier des Charges)
+  // Intelligent Clinical Voice & DPI Assistant powered by Gemini 4 Hydrogen
   app.post('/api/voice-assistant-llm', async (req, res) => {
     try {
-      const { userSpeech, modelKey, currentRoute, currentPatient, availablePatients } = req.body;
+      const {
+        userSpeech,
+        history,
+        currentRoute,
+        currentPatient,
+        availablePatients,
+        serviceContext
+      } = req.body;
+
       const cleanSpeech = (userSpeech || '').trim();
       if (!cleanSpeech) {
-        return res.status(400).json({ error: 'Commande vocale vide.' });
+        return res.status(400).json({ error: 'Commande vocale ou message vide.' });
       }
 
-      const selectedModelKey = (modelKey && OPEN_SOURCE_HEALTH_MODELS[modelKey]) ? modelKey : 'openbiollm';
-      const osModel = OPEN_SOURCE_HEALTH_MODELS[selectedModelKey];
-      const lower = cleanSpeech.toLowerCase();
+      const client = getGeminiClient();
+      if (!client) {
+        return res.status(503).json({
+          error: "Service d'IA clinique non configuré. Vérifiez la clé GEMINI_API_KEY dans Settings > Secrets."
+        });
+      }
 
-      // Clinical Intent Classification & Entity Extraction (Autonomous Deterministic Direct Execution NLU)
-      const parseSpeechLocally = () => {
-        // 1. Nursing DAR Targeted Transmission direct execution
-        if (lower.includes('transmission') || lower.includes('dar') || lower.includes('cible')) {
-          let target = 'Dyspnée et désaturation aiguë';
-          let dData = 'SpO2 à 88% en air ambiant, polypnée à 26/min, tirage sous-costal modéré.';
-          let dAction = 'Mise sous oxygène aux lunettes à 3 L/min, installation en position demi-assise, appel du médecin de garde.';
-          let dResult = 'SpO2 remontée à 95% à 15 minutes, régression de la polypnée à 20/min.';
+      const patientsList = Array.isArray(availablePatients)
+        ? availablePatients.slice(0, 25).map((p: any) => ({
+            id: p.id,
+            code: p.code,
+            name: `${p.firstName || ''} ${p.lastName || ''}`.trim(),
+            age: p.age,
+            gender: p.gender,
+            conditions: p.chronicConditions || ''
+          }))
+        : [];
 
-          if (lower.includes('hémoptysie') || lower.includes('saignement')) {
-            target = 'Hémoptysie de moyenne abondance';
-            dData = 'Crachats hémoptoïques répétés environ 60 mL, anxiété, TA 130/80.';
-            dAction = 'Repos strict au lit demi-assis, glace sur thorax, voie veineuse posée, oxygène 2L/min, bilan d\'urgence prélevé.';
-            dResult = 'Taux de saignement ralenti, constantes stables, surveillance continue.';
-          } else if (lower.includes('fièvre') || lower.includes('fievre') || lower.includes('hyperthermie')) {
-            target = 'Syndrome fébrile élevé';
-            dData = 'Température à 39.2°C avec frissons et sueurs profuses.';
-            dAction = 'Découvrement, vessie de glace, administration de Paracétamol 1g IV selon prescription, hydratation.';
-            dResult = 'Température abaissée à 37.8°C à 45 minutes, disparition des frissons.';
-          } else if (lower.includes('douleur')) {
-            target = 'Douleur thoracique pleurétique';
-            dData = 'EVA douleur à 7/10 majorée à l\'inspiration profonde et à la toux.';
-            dAction = 'Antalgique palier 2 administré selon PM, installation confortable.';
-            dResult = 'EVA diminuée à 2/10, respiration plus ample.';
+      const systemInstruction = `Tu es l'assistant clinique intelligent du Service de Pneumologie et Maladies Infectieuses du Centre Hospitalier Régional El Hadji Ibrahima Niass (CHREIN) à Kaolack, Sénégal.
+Tu assistes les médecins et infirmiers dans la prise en charge réelle des patients et la manipulation directe du Dossier Patient Informatisé (DPI).
+
+PRINCIPES FONDAMENTAUX D'INTELLIGENCE ET DE FIABILITÉ :
+1. Zéro réponse générique ou toute faite : analyse chaque demande en profondeur avec rigueur médicale (pneumologie, phtisiologie PNT Sénégal, infectiologie, pharmacologie, soins respiratoires, gazométrie, EFR/spirométrie, imagerie).
+2. Exploite le contexte réel du patient sélectionné (constantes récentes, allergies, antécédents, tabagisme/biomasse, consultations, prescriptions, transmissions infirmières DAR, résultats biologiques, hospitalisation en cours) et les données du service ci-dessous.
+3. Si l'utilisateur demande une question médicale, une interprétation clinique, un diagnostic différentiel, une vérification d'interaction médicamenteuse (ex: Rifampicine et inducteurs enzymatiques) ou un conseil thérapeutique : réponds de façon précise, argumentée et structurée avec actionType = "NONE".
+4. Si l'utilisateur donne un ordre d'action DPI clair et complet :
+   - RECORD_VITALS : enregistre uniquement les constantes effectivement dictées (ne invente pas les valeurs non mentionnées).
+   - PRESCRIBE : rédige une ordonnance clinique complète et sécurisée (DCI, posologie, voie, durée, précautions/allergies du patient).
+   - ADD_NURSING_DAR : rédige la transmission ciblée DAR fidèle aux faits cliniques dictés (ne complète jamais avec de faux chiffres inventés).
+   - ASSIGN_BED : affecte le lit demandé au patient identifié.
+   - ADD_PATIENT : crée un nouveau dossier avec les informations fournies.
+   - SEARCH_PATIENT : sélectionne le patient correspondant dans availablePatients (avec son patientId exact).
+   - NAVIGATE : ouvre la route demandée ('/', '/patients', '/consultations', '/hospitalization', '/nursing', '/explorations', '/clinical-scores', '/specialized-forms', '/imaging-ai', '/appointments').
+   - CALCULATE_SCORE : calcule un score clinique (CURB-65, Wells EP, Genève, mMRC, CAT, qSOFA) STRICTEMENT à partir des critères fournis ou présents dans le dossier du patient. S'il manque des critères indispensables pour calculer le score réel, N'INVENTE PAS DE VALEUR : mets actionType = "NONE" et demande précisément les critères manquants.
+5. SÉCURITÉ PATIENT : Pour toute action modifiant un dossier patient (RECORD_VITALS, PRESCRIBE, ADD_NURSING_DAR, ASSIGN_BED, CALCULATE_SCORE), si aucun patient n'est sélectionné (currentPatient est null) ET que l'utilisateur n'a pas nommé clairement un patient existant de la liste, mets actionType = "NONE" et demande quel patient est concerné (en citant les correspondances possibles si pertinent). Ne devine jamais un patient au hasard.
+6. Format de réponse :
+   - spokenResponse : synthèse orale claire, naturelle et directe en français (1 à 3 phrases maximum, adaptée à la lecture vocale, sans préfixe robotique répétitif).
+   - displayText : réponse détaillée, structurée en Markdown clair et clinique.
+
+CONTEXTE ACTIF DU DPI :
+- Route active : ${currentRoute || '/'}
+- Praticien connecté : ${serviceContext?.clinician || 'Praticien CHREIN'} (${serviceContext?.role || 'CLINICIAN'})
+- Patient actuellement ciblé : ${currentPatient ? JSON.stringify(currentPatient) : 'Aucun patient sélectionné'}
+- Lits du service : ${serviceContext?.bedsSummary ? JSON.stringify(serviceContext.bedsSummary) : 'Non transmis'}
+- Annuaire patients disponibles : ${JSON.stringify(patientsList)}`;
+
+      // Build multi-turn conversation history so follow-up questions understand prior context
+      const conversationContents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+      if (Array.isArray(history)) {
+        for (const msg of history.slice(-12)) {
+          if (!msg || typeof msg.text !== 'string' || !msg.text.trim()) continue;
+          const role = msg.sender === 'user' ? 'user' : 'model';
+          // Ensure alternating / valid role sequence
+          if (conversationContents.length === 0 && role === 'model') continue;
+          const last = conversationContents[conversationContents.length - 1];
+          if (last && last.role === role) {
+            last.parts.push({ text: msg.text.trim() });
+          } else {
+            conversationContents.push({ role, parts: [{ text: msg.text.trim() }] });
           }
+        }
+      }
 
-          // Extract if user spoke explicit data / action / result
-          const dataMatch = cleanSpeech.match(/(?:données?|donnee|d)\s*[:=]\s*(.*?)(?=\s*(?:actions?|action|a|résultats?|resultat|r|$))/i);
-          if (dataMatch && dataMatch[1].trim()) dData = dataMatch[1].trim();
+      const lastTurn = conversationContents[conversationContents.length - 1];
+      if (lastTurn && lastTurn.role === 'user') {
+        lastTurn.parts.push({ text: cleanSpeech });
+      } else {
+        conversationContents.push({ role: 'user', parts: [{ text: cleanSpeech }] });
+      }
 
-          const actionMatch = cleanSpeech.match(/(?:actions?|action|a)\s*[:=]\s*(.*?)(?=\s*(?:résultats?|resultat|r|$))/i);
-          if (actionMatch && actionMatch[1].trim()) dAction = actionMatch[1].trim();
-
-          const resultMatch = cleanSpeech.match(/(?:résultats?|resultat|r)\s*[:=]\s*(.*?)$/i);
-          if (resultMatch && resultMatch[1].trim()) dResult = resultMatch[1].trim();
-
-          const targetMatch = cleanSpeech.match(/(?:cible|target)\s*[:=]\s*([^\,\.\;\n]+)/i);
-          if (targetMatch && targetMatch[1].trim()) target = targetMatch[1].trim();
-
-          return {
-            spokenResponse: `Tâche exécutée directement : Transmission ciblée DAR enregistrée pour la cible « ${target} » dans le dossier de soins infirmiers.`,
-            displayText: `### 📋 Transmission Ciblée DAR Enregistrée Directement
-**Modèle :** ${osModel.name} (${osModel.badge})
-- **Cible :** ${target}
-- **Données (D) :** ${dData}
-- **Actions (A) :** ${dAction}
-- **Résultats (R) :** ${dResult}`,
-            actionType: 'ADD_NURSING_DAR',
-            actionData: {
-              targetRoute: '/nursing',
+      const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+          spokenResponse: {
+            type: Type.STRING,
+            description: 'Réponse vocale concise et naturelle en français (1 à 3 phrases).'
+          },
+          displayText: {
+            type: Type.STRING,
+            description: 'Réponse clinique détaillée en Markdown.'
+          },
+          actionType: {
+            type: Type.STRING,
+            description: 'Une parmi : NONE, RECORD_VITALS, PRESCRIBE, ADD_NURSING_DAR, ASSIGN_BED, ADD_PATIENT, SEARCH_PATIENT, NAVIGATE, CALCULATE_SCORE'
+          },
+          actionData: {
+            type: Type.OBJECT,
+            properties: {
+              targetRoute: { type: Type.STRING },
+              patientId: { type: Type.STRING },
+              patientName: { type: Type.STRING },
+              bedNumber: { type: Type.STRING },
+              vitals: {
+                type: Type.OBJECT,
+                properties: {
+                  bp: { type: Type.STRING },
+                  pulse: { type: Type.NUMBER },
+                  spo2Ambient: { type: Type.NUMBER },
+                  temperature: { type: Type.NUMBER },
+                  rr: { type: Type.NUMBER },
+                  weight: { type: Type.NUMBER },
+                  height: { type: Type.NUMBER }
+                }
+              },
               transmission: {
-                target,
-                data: dData,
-                action: dAction,
-                result: dResult
-              }
-            }
-          };
-        }
-
-        // 2. Add New Patient Direct Execution
-        if (lower.includes('créer patient') || lower.includes('nouveau patient') || lower.includes('ajouter patient')) {
-          // Extract name e.g. "créer patient Mamadou Faye 45 ans homme"
-          const ageMatch = cleanSpeech.match(/(\d{1,2})\s*ans/i);
-          const age = ageMatch ? parseInt(ageMatch[1], 10) : 40;
-          const gender = (lower.includes('femme') || lower.includes('féminin') || lower.includes('madame')) ? 'F' : 'M';
-          
-          let cleanName = cleanSpeech
-            .replace(/(?:créer|nouveau|ajouter)\s*(?:un)?\s*patient(?:e)?/i, '')
-            .replace(/\d{1,2}\s*ans/i, '')
-            .replace(/(?:homme|femme|masculin|féminin|madame|monsieur)/gi, '')
-            .trim();
-          
-          const parts = cleanName.split(/\s+/).filter(Boolean);
-          const firstName = parts[0] || 'Nouveau';
-          const lastName = parts.slice(1).join(' ') || 'Patient';
-
-          return {
-            spokenResponse: `Tâche exécutée directement : Dossier patient créé pour ${firstName} ${lastName}, ${age} ans. Identifiant permanent généré.`,
-            displayText: `### 👤 Nouveau Patient Enregistré Directement
-**Modèle :** ${osModel.name}
-- **Prénom :** ${firstName}
-- **Nom :** ${lastName}
-- **Âge :** ${age} ans
-- **Sexe :** ${gender === 'M' ? 'Masculin' : 'Féminin'}
-- **Service :** Pneumologie & Maladies Infectieuses CHREIN`,
-            actionType: 'ADD_PATIENT',
-            actionData: {
-              targetRoute: '/patients',
-              patient: {
-                firstName,
-                lastName,
-                age,
-                gender,
-                phone: '+221 77 000 00 00',
-                address: 'Région de Kaolack'
-              }
-            }
-          };
-        }
-
-        // 3. Assign Bed / Hospitalize Direct Execution
-        if (lower.includes('attribuer') || lower.includes('hospitaliser') || lower.includes('affecter') || (lower.includes('lit') && (lower.includes('10') || lower.includes('20') || lower.includes('30')))) {
-          const bedNumMatch = cleanSpeech.match(/lit\s*(?:n°|numéro)?\s*(\d{1,3}[A-Z]?)/i);
-          const bedNumber = bedNumMatch ? bedNumMatch[1] : '101';
-
-          // Match patient if specified
-          let patientToAdmit = availablePatients?.[0];
-          if (Array.isArray(availablePatients)) {
-            for (const p of availablePatients) {
-              const fullName = `${p.firstName || ''} ${p.lastName || ''}`.toLowerCase();
-              if (lower.includes(fullName) || (p.lastName && lower.includes(p.lastName.toLowerCase()))) {
-                patientToAdmit = p;
-                break;
-              }
-            }
-          }
-
-          const patName = patientToAdmit ? `${patientToAdmit.firstName} ${patientToAdmit.lastName}` : 'Patient Hospitalisé';
-
-          return {
-            spokenResponse: `Tâche exécutée directement : Attribution du lit ${bedNumber} au patient ${patName} enregistrée dans le module d'hospitalisation.`,
-            displayText: `### 🛏️ Hospitalisation Enregistrée Directement
-**Modèle :** ${osModel.name}
-- **Lit affecté :** Lit ${bedNumber}
-- **Patient :** ${patName} (${patientToAdmit?.code || 'IP-Actif'})
-- **Statut du lit :** Occupé
-- **Service :** Unité d'hospitalisation pneumologique`,
-            actionType: 'ASSIGN_BED',
-            actionData: {
-              targetRoute: '/hospitalization',
-              bedNumber,
-              patientId: patientToAdmit?.id,
-              patientName: patName
-            }
-          };
-        }
-
-        // 4. Clinical Score Calculation Direct Execution
-        if (lower.includes('calculer score') || lower.includes('score de wells') || lower.includes('score curb') || lower.includes('score mmrc') || lower.includes('score cat') || lower.includes('score geneve')) {
-          let scoreType = 'WELLS_EP';
-          let scoreName = 'Score de Wells (Embolie Pulmonaire)';
-          let scoreCategory = 'EMBOLISM';
-          let val = 4.5;
-          let interp = 'Probabilité clinique intermédiaire d\'embolie pulmonaire.';
-          let reco = 'Dosage des D-Dimères en urgence ou Angioscanner thoracique selon le protocole CHREIN.';
-
-          if (lower.includes('curb')) {
-            scoreType = 'CURB_65';
-            scoreName = 'Score CURB-65 (Pneumonie Communautaire)';
-            scoreCategory = 'PNEUMONIA';
-            val = 2;
-            interp = 'Risque intermédiaire de mortalité (score = 2).';
-            reco = 'Hospitalisation en pneumologie recommandée, bi-antibiothérapie IV/PO (Ceftriaxone + Macrolide).';
-          } else if (lower.includes('mmrc')) {
-            scoreType = 'MMRC_DYSPNEA';
-            scoreName = 'Échelle de Dyspnée mMRC';
-            scoreCategory = 'COPD';
-            val = 3;
-            interp = 'Stade 3 : Le patient s\'arrête pour respirer après environ 100 mètres ou quelques minutes sur terrain plat.';
-            reco = 'Optimisation du traitement inhalé (association LAMA + LABA) et réhabilitation respiratoire.';
-          } else if (lower.includes('cat')) {
-            scoreType = 'CAT_COPD';
-            scoreName = 'Score CAT (Impact de la BPCO)';
-            scoreCategory = 'COPD';
-            val = 22;
-            interp = 'Impact élevé de la BPCO sur la vie quotidienne (Score > 20).';
-            reco = 'Trithérapie inhalée (CSI/LABA/LAMA) si antécédents d\'exacerbations, surveillance EFR.';
-          }
-
-          return {
-            spokenResponse: `Tâche exécutée directement : ${scoreName} calculé avec un résultat de ${val}. Consigné dans le registre des scores.`,
-            displayText: `### 📊 Score Clinique Calculé et Enregistré Directement
-**Modèle :** ${osModel.name}
-- **Score :** ${scoreName}
-- **Valeur calculée :** **${val}**
-- **Interprétation :** ${interp}
-- **Conduite à tenir :** ${reco}`,
-            actionType: 'CALCULATE_SCORE',
-            actionData: {
-              targetRoute: '/clinical-scores',
-              scoreCalculation: {
-                scoreId: scoreType,
-                scoreName,
-                scoreCategory,
-                calculatedValue: val,
-                interpretation: interp,
-                clinicalRecommendation: reco,
-                referenceSource: 'Normes Pneumo-Phtisiologie 2026'
-              }
-            }
-          };
-        }
-
-        // 5. Check for Vitals entry direct execution
-        const hasVitalsWords = lower.includes('constante') || lower.includes('tension') || lower.includes('pouls') ||
-          lower.includes('saturation') || lower.includes('spo2') || lower.includes('température') || lower.includes('temperature') ||
-          lower.includes('fréquence respiratoire') || lower.includes('poids') || lower.includes('taille');
-
-        if (hasVitalsWords && (cleanSpeech.match(/\d+/) !== null)) {
-          const vitals: any = {};
-          // BP (Tension): e.g. "13/8", "13 8", "120/80", "13.8"
-          const bpMatch = cleanSpeech.match(/(?:tension|ta)\s*(?:de|:)?\s*(\d{1,3}[\/\.\s]\d{1,3})/i) ||
-                          cleanSpeech.match(/(\d{1,3}\/\d{1,3})/);
-          if (bpMatch) {
-            vitals.bp = bpMatch[1].replace(/\s+/g, '/').replace(/\./g, '/');
-          }
-
-          // Pulse (Pouls): e.g. "pouls 82", "pouls de 82", "fréquence cardiaque 85"
-          const pulseMatch = cleanSpeech.match(/(?:pouls|fc|cardiaque)\s*(?:de|:)?\s*(\d{2,3})/i);
-          if (pulseMatch) {
-            vitals.pulse = parseInt(pulseMatch[1], 10);
-          }
-
-          // SpO2 (Saturation): e.g. "saturation 94", "spo2 94", "sat 95%"
-          const spo2Match = cleanSpeech.match(/(?:saturation|spo2|sat)\s*(?:de|:)?\s*(\d{2,3})\s*%?/i);
-          if (spo2Match) {
-            vitals.spo2Ambient = parseInt(spo2Match[1], 10);
-          }
-
-          // Temperature: e.g. "température 38.2", "t 38.5", "temp 37"
-          const tempMatch = cleanSpeech.match(/(?:température|temperature|temp|t°)\s*(?:de|:)?\s*(\d{2}(?:[.,]\d)?)/i);
-          if (tempMatch) {
-            vitals.temperature = parseFloat(tempMatch[1].replace(',', '.'));
-          }
-
-          // Respiratory Rate (FR): e.g. "fréquence respiratoire 24", "fr 22"
-          const rrMatch = cleanSpeech.match(/(?:fréquence respiratoire|fr)\s*(?:de|:)?\s*(\d{1,2})/i);
-          if (rrMatch) {
-            vitals.rr = parseInt(rrMatch[1], 10);
-          }
-
-          // Weight: e.g. "poids 65 kg", "poids 65"
-          const weightMatch = cleanSpeech.match(/poids\s*(?:de|:)?\s*(\d{2,3}(?:[.,]\d)?)\s*(?:kg)?/i);
-          if (weightMatch) {
-            vitals.weight = parseFloat(weightMatch[1].replace(',', '.'));
-          }
-
-          // Height: e.g. "taille 172 cm", "taille 172"
-          const heightMatch = cleanSpeech.match(/taille\s*(?:de|:)?\s*(\d{2,3})\s*(?:cm)?/i);
-          if (heightMatch) {
-            vitals.height = parseInt(heightMatch[1], 10);
-          }
-
-          // Generate spoken confirmation and alert
-          const alerts: string[] = [];
-          if (vitals.spo2Ambient && vitals.spo2Ambient < 90) alerts.push('Désaturation sévère sous 90%');
-          else if (vitals.spo2Ambient && vitals.spo2Ambient < 93) alerts.push('Désaturation modérée');
-          if (vitals.temperature && vitals.temperature >= 38.5) alerts.push('Syndrome fébrile');
-
-          const parts: string[] = [];
-          if (vitals.bp) parts.push(`Tension ${vitals.bp}`);
-          if (vitals.pulse) parts.push(`Pouls ${vitals.pulse} bpm`);
-          if (vitals.spo2Ambient) parts.push(`SpO2 ${vitals.spo2Ambient}%`);
-          if (vitals.temperature) parts.push(`Température ${vitals.temperature}°C`);
-          if (vitals.rr) parts.push(`FR ${vitals.rr}/min`);
-          if (vitals.weight) parts.push(`Poids ${vitals.weight} kg`);
-
-          const reply = `Tâche exécutée directement : Constantes enregistrées dans le dossier patient. ${parts.join(', ')}.${alerts.length > 0 ? ` Attention : ${alerts.join(', ')}.` : ''}`;
-
-          return {
-            spokenResponse: reply,
-            displayText: `### 🩺 Constantes Vitales Enregistrées Directement
-**Modèle :** ${osModel.name}
-
-- ${parts.join('\n- ')}${alerts.length ? `\n\n⚠️ **Alertes cliniques :** ${alerts.join(', ')}` : ''}`,
-            actionType: 'RECORD_VITALS',
-            actionData: {
-              targetRoute: '/consultations',
-              vitals
-            }
-          };
-        }
-
-        // 6. Navigation Intent Direct Execution
-        if (lower.includes('consultation') || lower.includes('consultations') || lower.includes('12 étapes')) {
-          return {
-            spokenResponse: 'Tâche exécutée directement : Module de consultation en 12 étapes ouvert.',
-            displayText: `Navigation exécutée vers le **Module de Consultation Standardisée en 12 étapes** (CHREIN Kaolack).`,
-            actionType: 'NAVIGATE',
-            actionData: { targetRoute: '/consultations' }
-          };
-        }
-        if (lower.includes('patient') || lower.includes('patients') || lower.includes('dossier')) {
-          // Check if patient name is mentioned
-          let matchedPatient: any = null;
-          if (Array.isArray(availablePatients) && availablePatients.length > 0) {
-            for (const p of availablePatients) {
-              const fullName = `${p.firstName || ''} ${p.lastName || ''}`.toLowerCase();
-              const pCode = (p.code || '').toLowerCase();
-              if (lower.includes(fullName) || (p.lastName && lower.includes(p.lastName.toLowerCase())) || lower.includes(pCode)) {
-                matchedPatient = p;
-                break;
-              }
-            }
-          }
-
-          if (matchedPatient) {
-            return {
-              spokenResponse: `Tâche exécutée directement : Dossier patient de ${matchedPatient.firstName} ${matchedPatient.lastName} (${matchedPatient.code}) ouvert.`,
-              displayText: `### 👤 Patient Identifié et Sélectionné Directement\n**Nom :** ${matchedPatient.firstName} ${matchedPatient.lastName}\n**Identifiant Permanent (IP) :** \`${matchedPatient.code}\`\n**Âge :** ${matchedPatient.age || 'Non précisé'} ans`,
-              actionType: 'SEARCH_PATIENT',
-              actionData: {
-                targetRoute: '/consultations',
-                patientId: matchedPatient.id,
-                patientName: `${matchedPatient.firstName} ${matchedPatient.lastName}`
-              }
-            };
-          }
-
-          return {
-            spokenResponse: 'Tâche exécutée directement : Registre des dossiers patients affiché.',
-            displayText: `Navigation vers le **Registre des Dossiers Patients (IP)**.`,
-            actionType: 'NAVIGATE',
-            actionData: { targetRoute: '/patients' }
-          };
-        }
-
-        if (lower.includes('hospitalisation') || lower.includes('lit') || lower.includes('lits') || lower.includes('isolement')) {
-          return {
-            spokenResponse: "Tâche exécutée directement : Module d'hospitalisation et tableau des lits ouvert.",
-            displayText: `Navigation vers le **Module d'Hospitalisation** (Unités Isolement TB, Soins Continus VNI, Pneumo Générale).`,
-            actionType: 'NAVIGATE',
-            actionData: { targetRoute: '/hospitalization' }
-          };
-        }
-
-        if (lower.includes('infirmier') || lower.includes('soins') || lower.includes('paramédic') || lower.includes('dar') || lower.includes('transmission')) {
-          return {
-            spokenResponse: 'Tâche exécutée directement : Dossier de soins paramédicaux et transmissions DAR affiché.',
-            displayText: `Navigation vers les **Soins Paramédicaux & Transmissions DAR**.`,
-            actionType: 'NAVIGATE',
-            actionData: { targetRoute: '/nursing' }
-          };
-        }
-
-        if (lower.includes('exploration') || lower.includes('spirométrie') || lower.includes('gazométrie') || lower.includes('radio')) {
-          return {
-            spokenResponse: 'Tâche exécutée directement : Plateau des explorations fonctionnelles respiratoires ouvert.',
-            displayText: `Navigation vers le module **Explorations Médicales & Courbes EFR**.`,
-            actionType: 'NAVIGATE',
-            actionData: { targetRoute: '/explorations' }
-          };
-        }
-
-        if (lower.includes('spécialisé') || lower.includes('fiche tb') || lower.includes('programme national') || lower.includes('pnt')) {
-          return {
-            spokenResponse: 'Tâche exécutée directement : Formulaires cliniques spécialisés tuberculose et BPCO ouverts.',
-            displayText: `Navigation vers les **Formulaires Spécialisés TB / BPCO** (Normes PNT Sénégal).`,
-            actionType: 'NAVIGATE',
-            actionData: { targetRoute: '/specialized-forms' }
-          };
-        }
-
-        if (lower.includes('accueil') || lower.includes('tableau de bord') || lower.includes('dashboard')) {
-          return {
-            spokenResponse: 'Tâche exécutée directement : Retour au tableau de bord général.',
-            displayText: `Navigation vers le **Tableau de Bord Général**.`,
-            actionType: 'NAVIGATE',
-            actionData: { targetRoute: '/' }
-          };
-        }
-
-        // 7. Prescription Intent Direct Execution
-        if (lower.includes('prescri') || lower.includes('ordonnance') || lower.includes('traitement') || lower.includes('médicament')) {
-          if (lower.includes('tuberculose') || lower.includes('tb') || lower.includes('2rhze') || lower.includes('rhze') || lower.includes('quadrithérapie')) {
-            const protoText = `1. Schéma 2RHZE (Rifampicine 150mg + Isoniazide 75mg + Pyrazinamide 400mg + Éthambutol 275mg) : 4 comprimés en 1 prise matinale unique à jeun, tous les jours pendant 60 jours.\n2. Vitamine B6 (Pyridoxine) 50 mg : 1 comprimé par jour le matin (prévention de la neuropathie périphérique sous INH).\n3. Paracétamol 500 mg : 1 à 2 comprimés toutes les 8h si fièvre > 38.5°C ou céphalées.\n4. Contrôle bactériologique des crachats obligatoire à M2 au CHREIN.`;
-            return {
-              spokenResponse: 'Tâche exécutée directement : Protocole national antituberculeux 2RHZE phase intensive injecté et validé dans l\'ordonnance.',
-              displayText: `### 💊 Ordonnance Enregistrée Directement : Protocole Tuberculose PNT (2RHZE)\n${protoText}`,
-              actionType: 'PRESCRIBE',
-              actionData: {
-                targetRoute: '/consultations',
-                prescription: {
-                  protocolName: 'Protocole Tuberculose PNT (2RHZE)',
-                  rawText: protoText
+                type: Type.OBJECT,
+                properties: {
+                  target: { type: Type.STRING },
+                  data: { type: Type.STRING },
+                  action: { type: Type.STRING },
+                  result: { type: Type.STRING }
                 }
-              }
-            };
-          }
-
-          if (lower.includes('bpco') || lower.includes('exacerbation') || lower.includes('bronchite')) {
-            const protoText = `1. Amoxicilline + Acide Clavulanique 1g : 1 comprimé 3 fois par jour au cours des repas pendant 7 jours.\n2. Prednisolone 20 mg : 2 comprimés le matin (40 mg/jour) pendant 5 jours stricts (corticothérapie courte).\n3. Aérosol-doseur Salbutamol 100 µg : 2 bouffées avec chambre d'inhalation toutes les 4 à 6 heures si dyspnée.\n4. Ipratropium 20 µg : 2 bouffées matin et soir.\n5. Arrêt absolu du tabac et hydratation.`;
-            return {
-              spokenResponse: 'Tâche exécutée directement : Protocole d\'exacerbation de BPCO injecté et validé dans l\'ordonnance.',
-              displayText: `### 💊 Ordonnance Enregistrée Directement : Exacerbation BPCO\n${protoText}`,
-              actionType: 'PRESCRIBE',
-              actionData: {
-                targetRoute: '/consultations',
-                prescription: {
-                  protocolName: 'Exacerbation BPCO',
-                  rawText: protoText
-                }
-              }
-            };
-          }
-
-          if (lower.includes('asthme') || lower.includes('crise') || lower.includes('ventoline')) {
-            const protoText = `1. Salbutamol 100 µg (Ventoline) : 2 à 4 bouffées avec chambre d'inhalation toutes les 20 minutes la 1ère heure, puis à la demande.\n2. Prednisolone 20 mg : 2 comprimés par jour le matin pendant 5 jours.\n3. Budésonide/Formotérol 160/4.5 µg : 1 inhalation matin et soir en traitement de fond.\n4. Règle de sécurité : Consulter en urgence si persistance de la gêne respiratoire.`;
-            return {
-              spokenResponse: 'Tâche exécutée directement : Protocole de crise d\'asthme injecté et validé dans l\'ordonnance.',
-              displayText: `### 💊 Ordonnance Enregistrée Directement : Crise d'Asthme Aiguë / Palier GINA\n${protoText}`,
-              actionType: 'PRESCRIBE',
-              actionData: {
-                targetRoute: '/consultations',
-                prescription: {
-                  protocolName: 'Crise d\'Asthme',
-                  rawText: protoText
-                }
-              }
-            };
-          }
-
-          // Generic prescription directly formatted
-          const genProto = `Prescription validée : ${cleanSpeech.replace(/(?:prescrire|ordonnance|traitement)\s*/i, '')}. Posologie conforme aux recommandations pneumologiques.`;
-          return {
-            spokenResponse: `Tâche exécutée directement : Prescription médicale enregistrée et injectée dans le dossier de consultation.`,
-            displayText: `### 💊 Prescription Validée Directement\n${genProto}`,
-            actionType: 'PRESCRIBE',
-            actionData: {
-              targetRoute: '/consultations',
+              },
               prescription: {
-                protocolName: 'Prescription Médicale Spécialisée',
-                rawText: genProto
+                type: Type.OBJECT,
+                properties: {
+                  protocolName: { type: Type.STRING },
+                  rawText: { type: Type.STRING }
+                }
+              },
+              patient: {
+                type: Type.OBJECT,
+                properties: {
+                  firstName: { type: Type.STRING },
+                  lastName: { type: Type.STRING },
+                  age: { type: Type.NUMBER },
+                  gender: { type: Type.STRING },
+                  phone: { type: Type.STRING },
+                  address: { type: Type.STRING }
+                }
+              },
+              scoreCalculation: {
+                type: Type.OBJECT,
+                properties: {
+                  scoreId: { type: Type.STRING },
+                  scoreName: { type: Type.STRING },
+                  scoreCategory: { type: Type.STRING },
+                  calculatedValue: { type: Type.NUMBER },
+                  interpretation: { type: Type.STRING },
+                  clinicalRecommendation: { type: Type.STRING },
+                  referenceSource: { type: Type.STRING }
+                }
               }
             }
-          };
-        }
-
-        // 8. Medical Q&A / Guidelines Retrieval
-        if (lower.includes('hémoptysie') || lower.includes('crachat de sang') || lower.includes('hemoptysie')) {
-          return {
-            spokenResponse: "CAT devant une hémoptysie au CHREIN : repos strict en décubitus latéral du côté supposé du saignement, 2 voies veineuses, oxygénothérapie titrée si SpO2 inférieure à 92%, cliché thoracique au lit et GeneXpert BK en urgence.",
-            displayText: `### 🫁 CAT devant une Hémoptysie (Protocole CHREIN Kaolack / PNT)
-**Modèle Open Source actif :** ${osModel.fullTitle}
-1. **Évaluation de l'abondance :**
-   - Faible (< 50 mL/24h) : crachats striés de sang.
-   - Moyenne (50 à 200 mL/24h) : crachats hémoptoïques répétés.
-   - Massive (> 200 mL/24h) : urgence vitale immédiate avec risque d'inondation bronchique.
-2. **Mesures d'urgence immédiates :**
-   - Décubitus latéral du côté de la lésion suspectée (pour préserver le poumon sain).
-   - Pose de 2 voies veineuses périphériques de bon calibre, monitorage cardiorespiratoire.
-   - Oxygénothérapie titrée si SpO2 < 92%.
-   - Bilan d'urgence : Groupe-Rhésus, NFS-Plaquettes, TP/TCA, GeneXpert MTB/RIF, Radio du thorax au lit.
-3. **Étiologies prioritaires au Sénégal :**
-   - Tuberculose pulmonaire active ou séquellaire (greffe aspergillaire sur cavité).
-   - Dilatation des bronches (DDB).
-   - Cancer bronchopulmonaire ou pneumopathie bactérienne nécrosante.`,
-            actionType: 'MEDICAL_QA',
-            actionData: {}
-          };
-        }
-
-        if (lower.includes('pyrazinamide') || lower.includes('éthambutol') || lower.includes('isoniazide') || lower.includes('rifampicine')) {
-          return {
-            spokenResponse: "Pour les antituberculeux majeurs : la Rifampicine induit une coloration orange bénigne des urines. L'Isoniazide expose à l'hépatite et à la neuropathie prévenue par la vitamine B6. La Pyrazinamide est contre-indiquée si insuffisance hépatique sévère ou goutte. L'Éthambutol exige une surveillance visuelle de la névrite optique.",
-            displayText: `### 💊 Fiche Thérapeutique des Antituberculeux Majeurs (PNT Sénégal)
-**Modèle Open Source actif :** ${osModel.fullTitle}
-- **Rifampicine (R) :** Puissant inducteur enzymatique du CYP3A4. Coloration orange bénigne des urines et larmes. Toxicité hépatique et immuno-allergique.
-- **Isoniazide (H) :** Hépatotoxicité dose-dépendante. Neuropathie périphérique prévenue systématiquement par la Pyridoxine (Vitamine B6 50mg/j).
-- **Pyrazinamide (Z) :** Hyperuricémie fréquente (arthralgies). Contre-indiqué en cas d'insuffisance hépatique sévère.
-- **Éthambutol (E) :** Risque de névrite optique rétrobulbaire dose-dépendante (baisse d'acuité visuelle et dyschromatopsie rouge-vert). Surveillance visuelle obligatoire.`,
-            actionType: 'MEDICAL_QA',
-            actionData: {}
-          };
-        }
-
-        // 9. Default Clinical Order Execution Fallback
-        return {
-          spokenResponse: `Tâche exécutée directement : Commande clinique prise en compte pour ${cleanSpeech}.`,
-          displayText: `### 🎙️ Commande Clinique Exécutée Directement
-**Modèle Open Source actif :** ${osModel.fullTitle} (${osModel.badge})  
-*Texte transcrit :* « ${cleanSpeech} »
-
-**Tâches exécutées directement à la voix :**
-- 🩺 **Enregistrement des constantes vitales :** *"Tension 13 8 pouls 82 saturation 94 température 38.2"*
-- 💊 **Prescription directe :** *"Prescrire protocole tuberculose 2RHZE"* ou *"Prescrire BPCO"*
-- 📋 **Transmission infirmière DAR :** *"Transmission DAR cible dyspnée données SpO2 88 action O2 3L résultat 95%"*
-- 🛏️ **Attribution de lit :** *"Attribuer lit 102 au patient Mamadou Diop"*
-- 👤 **Création patient :** *"Créer patient Ousmane Diagne 45 ans"*
-- 📊 **Calcul de score :** *"Calculer le score de Wells"* ou *"Calculer CURB-65"*
-- 🧭 **Navigation immédiate :** *"Aller aux consultations"*, *"Ouvrir les soins infirmiers"*, *"Voir les lits"*`,
-          actionType: 'INFO',
-          actionData: {}
-        };
+          }
+        },
+        required: ['spokenResponse', 'displayText', 'actionType']
       };
 
-      // Try LLM cloud reasoning if available, with immediate fallback to local NLU
-      const client = getGeminiClient();
-      if (client) {
+      let lastErr: any = null;
+      for (const modelName of ['gemini-4-hydrogen', 'gemini-3.1-flash-lite']) {
         try {
-          const prompt = `Tu es l'Assistante Vocale Clinique Autonome du Service de Pneumologie et Maladies Infectieuses du CHREIN de Kaolack (Sénégal).
-Tu incarnes le moteur Open Source d'IA médicale : **${osModel.name}** (${osModel.organization}).
-
-RÈGLE MAJEURE ET ABSOLUE :
-L'utilisateur a exigé : "L'assistant doit exécuter les tâches directement".
-Tu ne dois JAMAIS être passive, tu ne dois JAMAIS demander de confirmation préalable ("veuillez confirmer", "voulez-vous que je...", "en attente de votre accord"), tu ne dois JAMAIS hésiter.
-Tu DOIS EXÉCUTER l'ordre immédiatement et de façon affirmative !
-Dans "spokenResponse", commence TOUJOURS par formuler clairement ce qui est directement exécuté : "Tâche exécutée directement : [description précise de l'action exécutée]".
-
-Ordre vocal reçu de l'utilisateur : "${cleanSpeech}"
-Module/Route active actuelle : "${currentRoute || '/'}"
-Patient actuellement sélectionné : ${currentPatient ? JSON.stringify({ name: `${currentPatient.firstName} ${currentPatient.lastName}`, code: currentPatient.code, age: currentPatient.age }) : 'Aucun'}
-Patients connus dans le service : ${JSON.stringify((availablePatients || []).slice(0, 10).map((p: any) => ({ id: p.id, name: `${p.firstName} ${p.lastName}`, code: p.code })))}
-
-Détermine l'intention clinique et produis les données d'exécution directe :
-- RECORD_VITALS : dictée de constantes (TA, pouls, SpO2, FR, T°, poids, taille). Extrais-les dans un objet vitals { bp, pulse, spo2Ambient, temperature, rr, weight, height }.
-- PRESCRIBE : prescription d'un médicament ou protocole (ex: 2RHZE tuberculose, BPCO, asthme, ceftriaxone). Remplis { protocolName, rawText }.
-- ADD_NURSING_DAR : transmission ciblée infirmière DAR. Remplis { target, data, action, result }.
-- ASSIGN_BED : attribution de lit ou hospitalisation. Remplis { bedNumber, patientName, patientId }.
-- ADD_PATIENT : création de nouveau patient. Remplis { firstName, lastName, age, gender }.
-- SEARCH_PATIENT : sélection ou recherche d'un patient par son nom ou code IP. Extrais { patientId, patientName }.
-- NAVIGATE : navigation vers une page ('/consultations', '/patients', '/hospitalization', '/clinical-scores', '/nursing', '/explorations', '/specialized-forms', '/').
-- CALCULATE_SCORE : calcul et enregistrement d'un score (Wells, CURB-65, mMRC, CAT, Genève). Remplis { scoreId, scoreName, calculatedValue, interpretation, clinicalRecommendation }.
-- MEDICAL_QA : question médicale ou conduite à tenir pneumologique selon les protocoles sénégalais et OMS.
-
-Réponds STRICTEMENT avec un JSON valide :
-{
-  "spokenResponse": "Tâche exécutée directement : ...",
-  "displayText": "Texte détaillé formaté en Markdown confirmant l'action exécutée directement.",
-  "actionType": "RECORD_VITALS" | "PRESCRIBE" | "ADD_NURSING_DAR" | "ASSIGN_BED" | "ADD_PATIENT" | "SEARCH_PATIENT" | "NAVIGATE" | "CALCULATE_SCORE" | "MEDICAL_QA" | "INFO",
-  "actionData": {
-    "targetRoute": "/consultations",
-    "vitals": { "bp": "13/8", "pulse": 82, "spo2Ambient": 94, "temperature": 38.2, "rr": 22 },
-    "transmission": { "target": "Dyspnée aiguë", "data": "SpO2 88%", "action": "Oxygène 3L/min", "result": "SpO2 96%" },
-    "bedNumber": "101",
-    "patient": { "firstName": "Ousmane", "lastName": "Diagne", "age": 45, "gender": "M" },
-    "patientId": "p1",
-    "patientName": "Mamadou Diop",
-    "scoreType": "Wells",
-    "prescription": { "protocolName": "Tuberculose 2RHZE", "rawText": "..." }
-  }
-}`;
+          const config: any = {
+            systemInstruction,
+            responseMimeType: 'application/json',
+            responseSchema,
+          };
+          if (modelName === 'gemini-4-hydrogen') {
+            config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+          }
 
           const generatePromise = client.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: {
-              responseMimeType: 'application/json'
-            }
+            model: modelName,
+            contents: conversationContents,
+            config,
           });
 
           const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Voice LLM timeout (4s)')), 4000)
+            setTimeout(() => reject(new Error('Délai de réponse IA dépassé (20s)')), 20000)
           );
 
           const response: any = await Promise.race([generatePromise, timeoutPromise]);
@@ -1225,23 +854,29 @@ Réponds STRICTEMENT avec un JSON valide :
             const parsed = JSON.parse(response.text.trim());
             return res.json({
               ...parsed,
-              modelInfo: osModel
+              modelUsed: modelName
             });
           }
-        } catch (cloudErr: any) {
-          console.warn('[Voice Assistant LLM] Cloud notice, using autonomous NLU engine:', cloudErr?.message);
+        } catch (modelErr: any) {
+          lastErr = modelErr;
+          console.warn(`[Voice Assistant] ${modelName} error:`, modelErr?.status || modelErr?.message || modelErr);
         }
       }
 
-      // Autonomous High-Precision Engine
-      const localResult = parseSpeechLocally();
-      return res.json({
-        ...localResult,
-        modelInfo: osModel
+      const status = lastErr?.status || 502;
+      const errMessage =
+        status === 403 || status === 401
+          ? "Clé API Gemini invalide ou autorisation refusée. Vérifiez Settings > Secrets."
+          : status === 429
+          ? "Quota API Gemini temporairement atteint. Réessayez dans quelques instants."
+          : lastErr?.message || "L'assistant clinique IA n'a pas pu traiter la demande.";
+
+      return res.status(status >= 400 && status < 600 ? status : 502).json({
+        error: errMessage
       });
     } catch (err: any) {
       console.error('[Voice Assistant Route Error]:', err);
-      res.status(500).json({ error: "Erreur lors du traitement de l'ordre vocal." });
+      res.status(500).json({ error: err?.message || "Erreur interne lors du traitement de l'ordre vocal." });
     }
   });
 
@@ -1285,7 +920,7 @@ Règles strictes :
 - Renvoie STRICTEMENT le texte transcrit brut, sans introduction, sans guillemets, sans politesses, sans aucun préambule.`;
 
       let transcribedText = '';
-      for (const modelName of ['gemini-2.5-flash', 'gemini-2.5-flash-lite']) {
+      for (const modelName of ['gemini-3.5-transcribe', 'gemini-4-hydrogen']) {
         try {
           const genPromise = client.models.generateContent({
             model: modelName,
